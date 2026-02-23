@@ -1,0 +1,294 @@
+"""Tests for doc_parser.textin_client — TextIn API client."""
+
+from __future__ import annotations
+
+import base64
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+
+from doc_parser.config import Settings
+from doc_parser.textin_client import (
+    DEFAULT_PARAMS,
+    ParseResult,
+    TextInAPIError,
+    TextInClient,
+    _is_retryable,
+    decode_excel,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_settings() -> Settings:
+    return Settings(
+        textin_app_id="test-app",
+        textin_secret_code="test-secret",
+        textin_parse_mode="auto",
+    )
+
+
+def _make_client() -> TextInClient:
+    return TextInClient(_make_settings())
+
+
+# ---------------------------------------------------------------------------
+# decode_excel
+# ---------------------------------------------------------------------------
+
+def test_decode_excel_roundtrip():
+    """base64 encode → decode_excel returns original bytes."""
+    original = b"spreadsheet-bytes"
+    encoded = base64.b64encode(original).decode()
+    assert decode_excel(encoded) == original
+
+
+# ---------------------------------------------------------------------------
+# _build_params
+# ---------------------------------------------------------------------------
+
+def test_build_params_defaults():
+    """Defaults match DEFAULT_PARAMS with parse_mode from settings."""
+    client = _make_client()
+    params = client._build_params()
+    assert params["parse_mode"] == "auto"
+    assert params["get_excel"] == "1"
+    assert params["apply_chart"] == "1"
+    assert params["table_flavor"] == "html"
+
+
+def test_build_params_override_parse_mode():
+    """parse_mode override is applied."""
+    client = _make_client()
+    params = client._build_params(parse_mode="scan")
+    assert params["parse_mode"] == "scan"
+
+
+def test_build_params_no_excel():
+    """get_excel=False sets param to '0'."""
+    client = _make_client()
+    params = client._build_params(get_excel=False)
+    assert params["get_excel"] == "0"
+
+
+def test_build_params_no_chart():
+    """apply_chart=False sets param to '0'."""
+    client = _make_client()
+    params = client._build_params(apply_chart=False)
+    assert params["apply_chart"] == "0"
+
+
+# ---------------------------------------------------------------------------
+# _parse_response
+# ---------------------------------------------------------------------------
+
+def test_parse_response_full():
+    """Full response is parsed into ParseResult correctly."""
+    client = _make_client()
+    data = {
+        "markdown": "# Hello",
+        "detail": [{"type": "text", "text": "Hello"}],
+        "pages": [{"page_number": 1}],
+        "excel": base64.b64encode(b"xls").decode(),
+        "total_page_number": 3,
+        "valid_page_number": 2,
+        "duration": 500,
+        "request_id": "req-1",
+    }
+    result = client._parse_response(data, {})
+    assert result.markdown == "# Hello"
+    assert len(result.detail) == 1
+    assert result.excel_base64 is not None
+    assert result.total_page_number == 3
+    assert result.valid_page_number == 2
+    assert result.duration_ms == 500
+    assert result.request_id == "req-1"
+    assert result.has_chart is False
+
+
+def test_parse_response_chart_detection():
+    """has_chart is True when a chart image element exists."""
+    client = _make_client()
+    data = {
+        "detail": [
+            {"type": "image", "image_type": "chart"},
+            {"type": "text", "text": "caption"},
+        ],
+    }
+    result = client._parse_response(data, {})
+    assert result.has_chart is True
+
+
+def test_parse_response_missing_fields():
+    """Missing fields default to empty/zero values."""
+    client = _make_client()
+    result = client._parse_response({}, {})
+    assert result.markdown == ""
+    assert result.detail == []
+    assert result.pages == []
+    assert result.excel_base64 is None
+    assert result.total_page_number == 0
+    assert result.duration_ms == 0
+
+
+# ---------------------------------------------------------------------------
+# get_parse_config
+# ---------------------------------------------------------------------------
+
+def test_get_parse_config_matches_build_params():
+    """get_parse_config() returns the same dict as _build_params()."""
+    client = _make_client()
+    assert client.get_parse_config() == client._build_params()
+    assert client.get_parse_config(parse_mode="scan") == client._build_params(parse_mode="scan")
+
+
+# ---------------------------------------------------------------------------
+# _is_retryable
+# ---------------------------------------------------------------------------
+
+def test_is_retryable_5xx():
+    """HTTP 5xx errors are retryable."""
+    resp = MagicMock()
+    resp.status_code = 502
+    exc = httpx.HTTPStatusError("bad gateway", request=MagicMock(), response=resp)
+    assert _is_retryable(exc) is True
+
+
+def test_is_retryable_4xx():
+    """HTTP 4xx errors are not retryable."""
+    resp = MagicMock()
+    resp.status_code = 403
+    exc = httpx.HTTPStatusError("forbidden", request=MagicMock(), response=resp)
+    assert _is_retryable(exc) is False
+
+
+def test_is_retryable_connect_error():
+    """ConnectError is retryable."""
+    assert _is_retryable(httpx.ConnectError("connection refused")) is True
+
+
+def test_is_retryable_read_timeout():
+    """ReadTimeout is retryable."""
+    assert _is_retryable(httpx.ReadTimeout("read timeout")) is True
+
+
+def test_is_retryable_value_error():
+    """ValueError is not retryable."""
+    assert _is_retryable(ValueError("bad value")) is False
+
+
+# ---------------------------------------------------------------------------
+# TextInAPIError
+# ---------------------------------------------------------------------------
+
+def test_textin_api_error_attributes():
+    """TextInAPIError stores code and message."""
+    err = TextInAPIError(40101, "Invalid credentials")
+    assert err.code == 40101
+    assert err.message == "Invalid credentials"
+    assert "40101" in str(err)
+    assert "Invalid credentials" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# parse_file (mocked httpx)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_parse_file_success(tmp_path: Path):
+    """parse_file returns ParseResult on success."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "code": 200,
+        "result": {
+            "markdown": "# Parsed",
+            "detail": [{"type": "text", "text": "Parsed"}],
+            "pages": [],
+            "total_page_number": 1,
+            "valid_page_number": 1,
+            "duration": 100,
+            "request_id": "r1",
+        },
+    }
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    result = await client.parse_file(pdf)
+    assert result.markdown == "# Parsed"
+    assert result.total_page_number == 1
+    mock_http.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_parse_file_textin_error_code(tmp_path: Path):
+    """parse_file raises TextInAPIError when TextIn code != 200."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "code": 40101,
+        "message": "Invalid token",
+    }
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    with pytest.raises(TextInAPIError) as exc_info:
+        await client.parse_file(pdf)
+    assert exc_info.value.code == 40101
+
+
+@pytest.mark.asyncio
+async def test_parse_file_http_error(tmp_path: Path):
+    """parse_file raises HTTPStatusError on non-retryable HTTP error."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    resp_403 = MagicMock()
+    resp_403.status_code = 403
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("forbidden", request=MagicMock(), response=resp_403)
+    )
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.parse_file(pdf)
+
+
+# ---------------------------------------------------------------------------
+# close
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_close_calls_aclose():
+    """close() calls aclose() on the underlying httpx client."""
+    client = _make_client()
+    mock_http = AsyncMock()
+    mock_http.is_closed = False
+    mock_http.aclose = AsyncMock()
+    client._client = mock_http
+
+    await client.close()
+    mock_http.aclose.assert_called_once()
