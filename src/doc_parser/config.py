@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     google_credentials_file: str = "credentials.json"
     google_service_account: bool = False
 
+    # Extraction provider: "textin" or "llm"
+    extraction_provider: str = "textin"
+
+    # LLM extraction settings (OpenRouter / OpenAI-compatible)
+    llm_api_key: str = ""
+    llm_base_url: str = "https://openrouter.ai/api/v1"
+    llm_model: str = "openai/gpt-4o-mini"
+    llm_max_tokens: int = 1024
+    llm_temperature: float = 0.0
+    llm_context_chars: int = 4000
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def parsed_path(self) -> Path:

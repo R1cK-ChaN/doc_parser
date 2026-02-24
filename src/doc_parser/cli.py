@@ -262,12 +262,16 @@ def parse_local(
 @cli.command("extract")
 @click.argument("file_id", type=int)
 @click.option("--force", is_flag=True, help="Re-extract even if already completed.")
-def extract(file_id: int, force: bool) -> None:
+@click.option("--provider", type=click.Choice(["textin", "llm"]), default=None,
+              help="Extraction provider (overrides config).")
+def extract(file_id: int, force: bool, provider: str | None) -> None:
     """Extract structured entities from a document (Step 3)."""
     from doc_parser.steps import run_extraction
 
     settings = _init_db_engine()
     settings.ensure_dirs()
+    if provider:
+        settings.extraction_provider = provider
 
     result = asyncio.run(run_extraction(settings, file_id, force=force))
 
@@ -280,12 +284,16 @@ def extract(file_id: int, force: bool) -> None:
 @cli.command("extract-folder")
 @click.argument("folder_id")
 @click.option("--force", is_flag=True, help="Re-extract even if already completed.")
-def extract_folder(folder_id: str, force: bool) -> None:
+@click.option("--provider", type=click.Choice(["textin", "llm"]), default=None,
+              help="Extraction provider (overrides config).")
+def extract_folder(folder_id: str, force: bool, provider: str | None) -> None:
     """Extract entities from all files in a Google Drive folder (Step 3)."""
     from doc_parser.pipeline import _ensure_drive_doc_files
 
     settings = _init_db_engine()
     settings.ensure_dirs()
+    if provider:
+        settings.extraction_provider = provider
 
     async def _run():
         doc_file_ids = await _ensure_drive_doc_files(settings, folder_id)
@@ -310,12 +318,16 @@ def extract_folder(folder_id: str, force: bool) -> None:
 @cli.command("run-all")
 @click.argument("file_id", type=int)
 @click.option("--force", is_flag=True, help="Force re-run all steps.")
-def run_all(file_id: int, force: bool) -> None:
+@click.option("--provider", type=click.Choice(["textin", "llm"]), default=None,
+              help="Extraction provider (overrides config).")
+def run_all(file_id: int, force: bool, provider: str | None) -> None:
     """Run full pipeline: watermark → parse → extract (Steps 1+2+3)."""
     from doc_parser.pipeline import run_all_steps
 
     settings = _init_db_engine()
     settings.ensure_dirs()
+    if provider:
+        settings.extraction_provider = provider
 
     results = asyncio.run(run_all_steps(settings, file_id, force=force))
 
@@ -328,12 +340,16 @@ def run_all(file_id: int, force: bool) -> None:
 @cli.command("run-all-folder")
 @click.argument("folder_id")
 @click.option("--force", is_flag=True, help="Force re-run all steps.")
-def run_all_folder(folder_id: str, force: bool) -> None:
+@click.option("--provider", type=click.Choice(["textin", "llm"]), default=None,
+              help="Extraction provider (overrides config).")
+def run_all_folder(folder_id: str, force: bool, provider: str | None) -> None:
     """Run full pipeline for all files in a Google Drive folder."""
     from doc_parser.pipeline import _ensure_drive_doc_files, run_all_steps
 
     settings = _init_db_engine()
     settings.ensure_dirs()
+    if provider:
+        settings.extraction_provider = provider
 
     async def _run():
         doc_file_ids = await _ensure_drive_doc_files(settings, folder_id)

@@ -203,6 +203,22 @@ def test_extract_success(runner: CliRunner):
         assert "10" in result.output
 
 
+def test_extract_with_provider_flag(runner: CliRunner):
+    """extract --provider llm sets extraction_provider on settings."""
+    with (
+        patch("doc_parser.cli._init_db_engine") as mock_init,
+        patch("doc_parser.steps.step3_extract.run_extraction", new_callable=AsyncMock, return_value=11),
+        patch("doc_parser.steps.run_extraction", new_callable=AsyncMock, return_value=11),
+    ):
+        mock_settings = MagicMock()
+        mock_init.return_value = mock_settings
+
+        result = runner.invoke(cli, ["extract", "1", "--provider", "llm"])
+        assert result.exit_code == 0
+        assert "11" in result.output
+        mock_settings.__setattr__("extraction_provider", "llm")
+
+
 # ---------------------------------------------------------------------------
 # run-all
 # ---------------------------------------------------------------------------

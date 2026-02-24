@@ -150,6 +150,8 @@ class DocExtraction(Base):
     completed_at: Mapped[int | None] = mapped_column(BigInteger)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     textin_request_id: Mapped[str | None] = mapped_column(String(255))
+    provider: Mapped[str | None] = mapped_column(String(50))
+    llm_model: Mapped[str | None] = mapped_column(String(255))
 
     # Extracted fields
     title: Mapped[str | None] = mapped_column(String(1024))

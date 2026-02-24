@@ -1,0 +1,236 @@
+"""Tests for doc_parser.extraction — provider protocol + implementations."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+
+from doc_parser.config import Settings
+from doc_parser.extraction import (
+    ExtractionProvider,
+    LLMExtractionProvider,
+    TextInExtractionProvider,
+    _parse_json_response,
+    create_extraction_provider,
+)
+from doc_parser.textin_client import EXTRACTION_FIELDS, ExtractionResult
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_settings(tmp_path: Path, provider: str = "textin") -> Settings:
+    return Settings(
+        textin_app_id="test-app",
+        textin_secret_code="test-secret",
+        database_url="sqlite+aiosqlite://",
+        data_dir=tmp_path / "data",
+        extraction_provider=provider,
+        llm_api_key="test-key",
+        llm_base_url="https://test.openrouter.ai/api/v1",
+        llm_model="openai/gpt-4o-mini",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Protocol compliance
+# ---------------------------------------------------------------------------
+
+def test_textin_provider_is_extraction_provider(tmp_path: Path):
+    """TextInExtractionProvider satisfies the ExtractionProvider protocol."""
+    settings = _make_settings(tmp_path)
+    provider = TextInExtractionProvider(settings)
+    assert isinstance(provider, ExtractionProvider)
+
+
+def test_llm_provider_is_extraction_provider(tmp_path: Path):
+    """LLMExtractionProvider satisfies the ExtractionProvider protocol."""
+    settings = _make_settings(tmp_path, provider="llm")
+    provider = LLMExtractionProvider(settings)
+    assert isinstance(provider, ExtractionProvider)
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+def test_factory_returns_textin_by_default(tmp_path: Path):
+    settings = _make_settings(tmp_path, provider="textin")
+    provider = create_extraction_provider(settings)
+    assert isinstance(provider, TextInExtractionProvider)
+
+
+def test_factory_returns_llm_when_configured(tmp_path: Path):
+    settings = _make_settings(tmp_path, provider="llm")
+    provider = create_extraction_provider(settings)
+    assert isinstance(provider, LLMExtractionProvider)
+
+
+# ---------------------------------------------------------------------------
+# TextInExtractionProvider
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_textin_provider_requires_file_path(tmp_path: Path):
+    """TextInExtractionProvider raises ValueError without file_path."""
+    settings = _make_settings(tmp_path)
+    provider = TextInExtractionProvider(settings)
+    with pytest.raises(ValueError, match="file_path"):
+        await provider.extract(fields=EXTRACTION_FIELDS)
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_textin_provider_delegates_to_client(tmp_path: Path):
+    """TextInExtractionProvider delegates to TextInClient.extract_entities()."""
+    settings = _make_settings(tmp_path)
+    provider = TextInExtractionProvider(settings)
+
+    mock_result = ExtractionResult(
+        fields={"title": "Test Report"},
+        duration_ms=100,
+        request_id="ext-test",
+    )
+
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF test")
+
+    with patch.object(provider._client, "extract_entities", new_callable=AsyncMock, return_value=mock_result):
+        result = await provider.extract(file_path=pdf, fields=EXTRACTION_FIELDS)
+        assert result.fields["title"] == "Test Report"
+
+    await provider.close()
+
+
+# ---------------------------------------------------------------------------
+# LLMExtractionProvider
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_llm_provider_requires_markdown(tmp_path: Path):
+    """LLMExtractionProvider raises ValueError without markdown."""
+    settings = _make_settings(tmp_path, provider="llm")
+    provider = LLMExtractionProvider(settings)
+    with pytest.raises(ValueError, match="markdown"):
+        await provider.extract(fields=EXTRACTION_FIELDS)
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_llm_provider_calls_chat_completions(tmp_path: Path):
+    """LLMExtractionProvider calls the chat completions endpoint."""
+    settings = _make_settings(tmp_path, provider="llm")
+    provider = LLMExtractionProvider(settings)
+
+    llm_response = {
+        "id": "chatcmpl-test",
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "title": "LLM Report",
+                    "broker": "Test Broker",
+                    "authors": None,
+                    "publish_date": "2024-01-15",
+                    "market": "US",
+                    "sector": "Tech",
+                    "document_type": "Research",
+                    "target_company": "TestCorp",
+                    "ticker_symbol": "TST",
+                }),
+            },
+        }],
+    }
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.json.return_value = llm_response
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+    mock_client.is_closed = False
+    provider._client = mock_client
+
+    result = await provider.extract(
+        markdown="# Test Document\n\nSome finance report content...",
+        fields=EXTRACTION_FIELDS,
+    )
+
+    assert result.fields["title"] == "LLM Report"
+    assert result.fields["broker"] == "Test Broker"
+    assert result.fields["ticker_symbol"] == "TST"
+    assert result.request_id == "chatcmpl-test"
+
+    # Verify the endpoint called
+    mock_client.post.assert_called_once()
+    call_url = mock_client.post.call_args[0][0]
+    assert call_url.endswith("/chat/completions")
+
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_llm_provider_truncates_context(tmp_path: Path):
+    """LLMExtractionProvider truncates markdown to llm_context_chars."""
+    settings = _make_settings(tmp_path, provider="llm")
+    settings.llm_context_chars = 50
+    provider = LLMExtractionProvider(settings)
+
+    long_markdown = "x" * 200
+
+    llm_response = {
+        "id": "chatcmpl-trunc",
+        "choices": [{"message": {"content": json.dumps({"title": "T"})}}],
+    }
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.json.return_value = llm_response
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+    mock_client.is_closed = False
+    provider._client = mock_client
+
+    await provider.extract(markdown=long_markdown, fields=EXTRACTION_FIELDS)
+
+    # Check the user message was truncated
+    call_payload = mock_client.post.call_args[1]["json"]
+    user_msg = call_payload["messages"][1]["content"]
+    assert len(user_msg) == 50
+
+    await provider.close()
+
+
+# ---------------------------------------------------------------------------
+# _parse_json_response
+# ---------------------------------------------------------------------------
+
+def test_parse_json_response_plain():
+    """Plain JSON string is parsed correctly."""
+    result = _parse_json_response('{"title": "Test"}')
+    assert result == {"title": "Test"}
+
+
+def test_parse_json_response_code_fence():
+    """JSON wrapped in markdown code fence is parsed correctly."""
+    text = '```json\n{"title": "Fenced"}\n```'
+    result = _parse_json_response(text)
+    assert result == {"title": "Fenced"}
+
+
+def test_parse_json_response_code_fence_no_lang():
+    """JSON wrapped in bare code fence is parsed correctly."""
+    text = '```\n{"title": "Bare"}\n```'
+    result = _parse_json_response(text)
+    assert result == {"title": "Bare"}
+
+
+def test_parse_json_response_invalid():
+    """Invalid JSON raises ValueError."""
+    with pytest.raises(json.JSONDecodeError):
+        _parse_json_response("not json at all")

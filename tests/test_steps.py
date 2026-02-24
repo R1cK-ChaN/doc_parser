@@ -20,6 +20,7 @@ from doc_parser.models import (
 )
 from doc_parser.steps.step1_watermark import run_watermark_removal
 from doc_parser.steps.step2_parse import run_parse
+from doc_parser.extraction import TextInExtractionProvider
 from doc_parser.steps.step3_extract import run_extraction, parse_date_to_epoch
 from doc_parser.textin_client import (
     ExtractionResult,
@@ -323,12 +324,11 @@ async def test_step3_extract_success(tmp_path: Path, async_engine, mock_get_sess
         request_id="ext-1",
     )
 
-    with patch("doc_parser.steps.step3_extract.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.extract_entities = AsyncMock(return_value=mock_result)
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
+    mock_provider = MagicMock()
+    mock_provider.extract = AsyncMock(return_value=mock_result)
+    mock_provider.close = AsyncMock()
 
+    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
         result = await run_extraction(settings, doc_file_id)
         assert result is not None
 
@@ -341,6 +341,7 @@ async def test_step3_extract_success(tmp_path: Path, async_engine, mock_get_sess
         assert ext.ticker_symbol == "AAPL"
         assert ext.publish_date is not None
         assert ext.extraction_json_path is not None
+        assert ext.provider == "textin"
 
         # Verify DocFile was backfilled
         df = (await session.execute(select(DocFile))).scalar_one()
@@ -364,11 +365,10 @@ async def test_step3_extract_skip_existing(tmp_path: Path, async_engine, mock_ge
         session.add(ext)
         await session.commit()
 
-    with patch("doc_parser.steps.step3_extract.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
+    mock_provider = MagicMock()
+    mock_provider.close = AsyncMock()
 
+    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
         result = await run_extraction(settings, doc_file_id)
         assert result is None
 
@@ -381,14 +381,13 @@ async def test_step3_extract_failure(tmp_path: Path, async_engine, mock_get_sess
     pdf.write_bytes(b"%PDF test")
     doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
 
-    with patch("doc_parser.steps.step3_extract.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.extract_entities = AsyncMock(
-            side_effect=TextInAPIError(500, "Extract error")
-        )
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
+    mock_provider = MagicMock()
+    mock_provider.extract = AsyncMock(
+        side_effect=TextInAPIError(500, "Extract error")
+    )
+    mock_provider.close = AsyncMock()
 
+    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
         result = await run_extraction(settings, doc_file_id)
         assert result is None
 
@@ -421,12 +420,11 @@ async def test_step3_extract_links_to_parse(tmp_path: Path, async_engine, mock_g
         request_id="ext-2",
     )
 
-    with patch("doc_parser.steps.step3_extract.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.extract_entities = AsyncMock(return_value=mock_result)
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
+    mock_provider = MagicMock()
+    mock_provider.extract = AsyncMock(return_value=mock_result)
+    mock_provider.close = AsyncMock()
 
+    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
         result = await run_extraction(settings, doc_file_id)
         assert result is not None
 

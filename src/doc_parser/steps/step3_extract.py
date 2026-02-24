@@ -1,4 +1,4 @@
-"""Step 3: Entity extraction via TextIn API."""
+"""Step 3: Entity extraction via provider protocol."""
 
 from __future__ import annotations
 
@@ -9,9 +9,13 @@ from sqlalchemy import select
 
 from doc_parser.config import Settings
 from doc_parser.db import get_session
+from doc_parser.extraction import (
+    ExtractionProvider,
+    create_extraction_provider,
+)
 from doc_parser.models import DocExtraction, DocFile, DocParse, DocWatermark, epoch_now
 from doc_parser.storage import store_extraction_result
-from doc_parser.textin_client import EXTRACTION_FIELDS, TextInClient
+from doc_parser.textin_client import EXTRACTION_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,7 @@ async def run_extraction(
     *,
     force: bool = False,
     fields: list[dict[str, str]] | None = None,
+    provider: ExtractionProvider | None = None,
 ) -> int | None:
     """Extract structured entities from a document file.
 
@@ -43,7 +48,7 @@ async def run_extraction(
     2. Check for existing completed DocExtraction (skip if not force)
     3. Resolve file path (prefer cleaned from Step 1)
     4. Create DocExtraction row: status=running
-    5. Call textin.extract_entities()
+    5. Call provider.extract()
     6. Store full response JSON to disk
     7. Parse extracted fields into typed columns
     8. Backfill DocFile with extracted metadata
@@ -51,16 +56,17 @@ async def run_extraction(
 
     Returns doc_extraction.id or None on skip/failure.
     """
-    textin = TextInClient(settings)
+    if provider is None:
+        provider = create_extraction_provider(settings)
     try:
-        return await _do_extraction(settings, textin, doc_file_id, force=force, fields=fields)
+        return await _do_extraction(settings, provider, doc_file_id, force=force, fields=fields)
     finally:
-        await textin.close()
+        await provider.close()
 
 
 async def _do_extraction(
     settings: Settings,
-    textin: TextInClient,
+    provider: ExtractionProvider,
     doc_file_id: int,
     *,
     force: bool = False,
@@ -117,19 +123,32 @@ async def _do_extraction(
 
         use_fields = fields or EXTRACTION_FIELDS
 
+        # Load markdown for LLM provider
+        markdown = None
+        if settings.extraction_provider == "llm" and latest_parse and latest_parse.markdown_path:
+            md_file = settings.parsed_path / latest_parse.markdown_path
+            if md_file.exists():
+                markdown = md_file.read_text(encoding="utf-8")
+
         # Create DocExtraction row
         extraction = DocExtraction(
             doc_file_id=doc_file_id,
             doc_parse_id=latest_parse.id if latest_parse else None,
             status="running",
             started_at=epoch_now(),
-            extraction_config={"fields": use_fields},
+            provider=settings.extraction_provider,
+            llm_model=settings.llm_model if settings.extraction_provider == "llm" else None,
+            extraction_config={"fields": use_fields, "provider": settings.extraction_provider},
         )
         session.add(extraction)
         await session.flush()
 
         try:
-            ext_result = await textin.extract_entities(file_path, fields=use_fields)
+            ext_result = await provider.extract(
+                file_path=file_path,
+                markdown=markdown,
+                fields=use_fields,
+            )
         except Exception as exc:
             extraction.status = "failed"
             extraction.completed_at = epoch_now()
@@ -182,11 +201,12 @@ async def _do_extraction(
         doc_file.authors = extraction.authors or doc_file.authors
 
         logger.info(
-            "Extracted entities for %s: title=%s, broker=%s, ticker=%s",
+            "Extracted entities for %s: title=%s, broker=%s, ticker=%s (provider=%s)",
             doc_file.file_name,
             extraction.title,
             extraction.broker,
             extraction.ticker_symbol,
+            extraction.provider,
         )
         return extraction.id
 
