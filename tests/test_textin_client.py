@@ -12,9 +12,13 @@ import pytest
 from doc_parser.config import Settings
 from doc_parser.textin_client import (
     DEFAULT_PARAMS,
+    DEFAULT_PARSEX_PARAMS,
+    EXTRACTION_FIELDS,
+    ExtractionResult,
     ParseResult,
     TextInAPIError,
     TextInClient,
+    WatermarkResult,
     _is_retryable,
     decode_excel,
 )
@@ -48,7 +52,7 @@ def test_decode_excel_roundtrip():
 
 
 # ---------------------------------------------------------------------------
-# _build_params
+# _build_params (legacy)
 # ---------------------------------------------------------------------------
 
 def test_build_params_defaults():
@@ -83,6 +87,29 @@ def test_build_params_no_chart():
 
 
 # ---------------------------------------------------------------------------
+# _build_parsex_params
+# ---------------------------------------------------------------------------
+
+def test_build_parsex_params_defaults():
+    """ParseX defaults include pdf_parse_mode and md_detail."""
+    client = _make_client()
+    params = client._build_parsex_params()
+    assert params["pdf_parse_mode"] == "auto"
+    assert params["remove_watermark"] == "0"
+    assert params["md_detail"] == "2"
+    assert params["md_table_flavor"] == "html"
+
+
+def test_build_parsex_params_override():
+    """ParseX params can be overridden."""
+    client = _make_client()
+    params = client._build_parsex_params(parse_mode="scan", get_excel=False, md_detail=1)
+    assert params["pdf_parse_mode"] == "scan"
+    assert params["get_excel"] == "0"
+    assert params["md_detail"] == "1"
+
+
+# ---------------------------------------------------------------------------
 # _parse_response
 # ---------------------------------------------------------------------------
 
@@ -98,6 +125,9 @@ def test_parse_response_full():
         "valid_page_number": 2,
         "duration": 500,
         "request_id": "req-1",
+        "paragraphs": [{"text": "Hello"}],
+        "metrics": {"quality": 0.9},
+        "src_page_count": 5,
     }
     result = client._parse_response(data, {})
     assert result.markdown == "# Hello"
@@ -108,6 +138,9 @@ def test_parse_response_full():
     assert result.duration_ms == 500
     assert result.request_id == "req-1"
     assert result.has_chart is False
+    assert len(result.paragraphs) == 1
+    assert result.metrics == {"quality": 0.9}
+    assert result.src_page_count == 5
 
 
 def test_parse_response_chart_detection():
@@ -133,10 +166,46 @@ def test_parse_response_missing_fields():
     assert result.excel_base64 is None
     assert result.total_page_number == 0
     assert result.duration_ms == 0
+    assert result.paragraphs == []
+    assert result.metrics == {}
+    assert result.src_page_count == 0
 
 
 # ---------------------------------------------------------------------------
-# get_parse_config
+# _parse_extraction_response
+# ---------------------------------------------------------------------------
+
+def test_parse_extraction_response():
+    """Extraction response is parsed into ExtractionResult."""
+    client = _make_client()
+    data = {
+        "details": {
+            "title": [{"value": "Market Report", "position": {}}],
+            "broker": [{"value": "Goldman Sachs", "position": {}}],
+        },
+        "category": {"type": "research"},
+        "page_count": 5,
+        "duration": 300,
+        "request_id": "ext-1",
+    }
+    result = client._parse_extraction_response(data)
+    assert result.fields["title"] == "Market Report"
+    assert result.fields["broker"] == "Goldman Sachs"
+    assert result.page_count == 5
+    assert result.duration_ms == 300
+    assert result.request_id == "ext-1"
+
+
+def test_parse_extraction_response_empty():
+    """Empty extraction response returns empty fields."""
+    client = _make_client()
+    result = client._parse_extraction_response({})
+    assert result.fields == {}
+    assert result.duration_ms == 0
+
+
+# ---------------------------------------------------------------------------
+# get_parse_config / get_parsex_config
 # ---------------------------------------------------------------------------
 
 def test_get_parse_config_matches_build_params():
@@ -144,6 +213,12 @@ def test_get_parse_config_matches_build_params():
     client = _make_client()
     assert client.get_parse_config() == client._build_params()
     assert client.get_parse_config(parse_mode="scan") == client._build_params(parse_mode="scan")
+
+
+def test_get_parsex_config_matches_build_parsex_params():
+    """get_parsex_config() returns the same dict as _build_parsex_params()."""
+    client = _make_client()
+    assert client.get_parsex_config() == client._build_parsex_params()
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +270,40 @@ def test_textin_api_error_attributes():
 
 
 # ---------------------------------------------------------------------------
-# parse_file (mocked httpx)
+# EXTRACTION_FIELDS
+# ---------------------------------------------------------------------------
+
+def test_extraction_fields_defined():
+    """EXTRACTION_FIELDS has the expected keys."""
+    keys = {f["key"] for f in EXTRACTION_FIELDS}
+    assert "title" in keys
+    assert "broker" in keys
+    assert "publish_date" in keys
+    assert "ticker_symbol" in keys
+    assert "market" in keys
+
+
+# ---------------------------------------------------------------------------
+# WatermarkResult / ExtractionResult dataclasses
+# ---------------------------------------------------------------------------
+
+def test_watermark_result_defaults():
+    """WatermarkResult has expected defaults."""
+    wr = WatermarkResult()
+    assert wr.image_base64 == ""
+    assert wr.duration_ms == 0
+
+
+def test_extraction_result_defaults():
+    """ExtractionResult has expected defaults."""
+    er = ExtractionResult()
+    assert er.fields == {}
+    assert er.duration_ms == 0
+    assert er.request_id == ""
+
+
+# ---------------------------------------------------------------------------
+# parse_file (mocked httpx) — legacy endpoint
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -275,6 +383,175 @@ async def test_parse_file_http_error(tmp_path: Path):
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.parse_file(pdf)
+
+
+# ---------------------------------------------------------------------------
+# remove_watermark (mocked httpx)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_remove_watermark_success(tmp_path: Path):
+    """remove_watermark returns WatermarkResult on success."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "code": 200,
+        "result": {
+            "image": base64.b64encode(b"cleaned-image").decode(),
+            "duration": 150,
+        },
+    }
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    result = await client.remove_watermark(pdf)
+    assert isinstance(result, WatermarkResult)
+    assert result.image_base64 == base64.b64encode(b"cleaned-image").decode()
+    assert result.duration_ms == 150
+
+
+@pytest.mark.asyncio
+async def test_remove_watermark_error(tmp_path: Path):
+    """remove_watermark raises TextInAPIError on failure."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "code": 40001,
+        "message": "Bad image",
+    }
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    with pytest.raises(TextInAPIError) as exc_info:
+        await client.remove_watermark(pdf)
+    assert exc_info.value.code == 40001
+
+
+# ---------------------------------------------------------------------------
+# parse_file_x (mocked httpx) — ParseX endpoint
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_parse_file_x_success(tmp_path: Path):
+    """parse_file_x returns ParseResult on success."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "code": 200,
+        "result": {
+            "markdown": "# ParseX Result",
+            "detail": [{"type": "text", "text": "ParseX"}],
+            "pages": [{"page_number": 1}],
+            "paragraphs": [{"text": "paragraph"}],
+            "metrics": {"score": 0.95},
+            "total_page_number": 1,
+            "valid_page_number": 1,
+            "src_page_count": 3,
+            "duration": 200,
+            "request_id": "px-1",
+        },
+    }
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    result = await client.parse_file_x(pdf)
+    assert result.markdown == "# ParseX Result"
+    assert result.src_page_count == 3
+    assert len(result.paragraphs) == 1
+
+
+# ---------------------------------------------------------------------------
+# extract_entities (mocked httpx)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_extract_entities_success(tmp_path: Path):
+    """extract_entities returns ExtractionResult on success."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "code": 200,
+        "result": {
+            "details": {
+                "title": [{"value": "Q4 Report", "position": {}}],
+                "broker": [{"value": "Morgan Stanley", "position": {}}],
+            },
+            "page_count": 10,
+            "duration": 500,
+            "request_id": "ext-r1",
+        },
+    }
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    result = await client.extract_entities(pdf)
+    assert isinstance(result, ExtractionResult)
+    assert result.fields["title"] == "Q4 Report"
+    assert result.fields["broker"] == "Morgan Stanley"
+    assert result.page_count == 10
+    assert result.request_id == "ext-r1"
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_custom_fields(tmp_path: Path):
+    """extract_entities accepts custom field definitions."""
+    client = _make_client()
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "code": 200,
+        "result": {
+            "details": {
+                "custom_field": [{"value": "custom_value", "position": {}}],
+            },
+            "duration": 100,
+            "request_id": "ext-custom",
+        },
+    }
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+    mock_http.is_closed = False
+    client._client = mock_http
+
+    custom_fields = [{"key": "custom_field", "description": "A custom field"}]
+    result = await client.extract_entities(pdf, fields=custom_fields)
+    assert result.fields["custom_field"] == "custom_value"
+
+    # Verify the payload sent had custom fields
+    call_kwargs = mock_http.post.call_args
+    assert call_kwargs.kwargs["json"]["fields"] == custom_fields
 
 
 # ---------------------------------------------------------------------------

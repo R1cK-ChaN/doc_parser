@@ -45,6 +45,14 @@ def test_help_output(runner: CliRunner):
     assert "doc-parser" in result.output
 
 
+def test_help_shows_new_commands(runner: CliRunner):
+    """Help output includes new step commands."""
+    result = runner.invoke(cli, ["--help"])
+    assert "remove-watermark" in result.output
+    assert "extract" in result.output
+    assert "run-all" in result.output
+
+
 # ---------------------------------------------------------------------------
 # init-db
 # ---------------------------------------------------------------------------
@@ -140,3 +148,97 @@ def test_parse_folder_success(runner: CliRunner):
         assert result.exit_code == 0
         assert "Parsed: 2" in result.output
         assert "Skipped: 1" in result.output
+
+
+# ---------------------------------------------------------------------------
+# remove-watermark
+# ---------------------------------------------------------------------------
+
+def test_remove_watermark_success(runner: CliRunner):
+    """remove-watermark prints success with the doc_watermark ID."""
+    with (
+        patch("doc_parser.cli._init_db_engine") as mock_init,
+        patch("doc_parser.steps.step1_watermark.run_watermark_removal", new_callable=AsyncMock, return_value=5),
+        patch("doc_parser.steps.run_watermark_removal", new_callable=AsyncMock, return_value=5),
+    ):
+        mock_settings = MagicMock()
+        mock_init.return_value = mock_settings
+
+        result = runner.invoke(cli, ["remove-watermark", "1"])
+        assert result.exit_code == 0
+        assert "5" in result.output
+
+
+def test_remove_watermark_skipped(runner: CliRunner):
+    """remove-watermark shows skipped message when None."""
+    with (
+        patch("doc_parser.cli._init_db_engine") as mock_init,
+        patch("doc_parser.steps.step1_watermark.run_watermark_removal", new_callable=AsyncMock, return_value=None),
+        patch("doc_parser.steps.run_watermark_removal", new_callable=AsyncMock, return_value=None),
+    ):
+        mock_settings = MagicMock()
+        mock_init.return_value = mock_settings
+
+        result = runner.invoke(cli, ["remove-watermark", "1"])
+        assert result.exit_code == 0
+        assert "skipped" in result.output.lower() or "failed" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# extract
+# ---------------------------------------------------------------------------
+
+def test_extract_success(runner: CliRunner):
+    """extract prints success with the doc_extraction ID."""
+    with (
+        patch("doc_parser.cli._init_db_engine") as mock_init,
+        patch("doc_parser.steps.step3_extract.run_extraction", new_callable=AsyncMock, return_value=10),
+        patch("doc_parser.steps.run_extraction", new_callable=AsyncMock, return_value=10),
+    ):
+        mock_settings = MagicMock()
+        mock_init.return_value = mock_settings
+
+        result = runner.invoke(cli, ["extract", "1"])
+        assert result.exit_code == 0
+        assert "10" in result.output
+
+
+# ---------------------------------------------------------------------------
+# run-all
+# ---------------------------------------------------------------------------
+
+def test_run_all_success(runner: CliRunner):
+    """run-all shows pipeline results."""
+    with (
+        patch("doc_parser.cli._init_db_engine") as mock_init,
+        patch(
+            "doc_parser.pipeline.run_all_steps",
+            new_callable=AsyncMock,
+            return_value={"watermark_id": 1, "parse_id": 2, "extraction_id": 3},
+        ),
+    ):
+        mock_settings = MagicMock()
+        mock_init.return_value = mock_settings
+
+        result = runner.invoke(cli, ["run-all", "1"])
+        assert result.exit_code == 0
+        assert "Pipeline Results" in result.output
+
+
+# ---------------------------------------------------------------------------
+# parse (new step-based)
+# ---------------------------------------------------------------------------
+
+def test_parse_step_success(runner: CliRunner):
+    """parse (step 2) prints success with the doc_parse ID."""
+    with (
+        patch("doc_parser.cli._init_db_engine") as mock_init,
+        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=7),
+        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=7),
+    ):
+        mock_settings = MagicMock()
+        mock_init.return_value = mock_settings
+
+        result = runner.invoke(cli, ["parse", "1"])
+        assert result.exit_code == 0
+        assert "7" in result.output

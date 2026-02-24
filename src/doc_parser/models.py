@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import time
 
 from sqlalchemy import (
-    DateTime,
+    BigInteger,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
-    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+def epoch_now() -> int:
+    """Return current time as Unix epoch seconds."""
+    return int(time.time())
 
 
 class Base(DeclarativeBase):
@@ -33,19 +37,25 @@ class DocFile(Base):
     mime_type: Mapped[str | None] = mapped_column(String(127))
     file_name: Mapped[str] = mapped_column(String(512))
     file_size_bytes: Mapped[int | None] = mapped_column(Integer)
-    publish_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publish_date: Mapped[int | None] = mapped_column(BigInteger)
     broker: Mapped[str | None] = mapped_column(String(255))
     title: Mapped[str | None] = mapped_column(String(1024))
     drive_folder_id: Mapped[str | None] = mapped_column(String(255))
     local_path: Mapped[str | None] = mapped_column(String(1024))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    created_at: Mapped[int | None] = mapped_column(BigInteger, default=epoch_now)
+    updated_at: Mapped[int | None] = mapped_column(BigInteger, default=epoch_now, onupdate=epoch_now)
+
+    # New fields for query convenience (backfilled from Step 3)
+    market: Mapped[str | None] = mapped_column(String(255))
+    sector: Mapped[str | None] = mapped_column(String(255))
+    document_type: Mapped[str | None] = mapped_column(String(255))
+    target_company: Mapped[str | None] = mapped_column(String(255))
+    ticker_symbol: Mapped[str | None] = mapped_column(String(50))
+    authors: Mapped[str | None] = mapped_column(String(1024))
 
     parses: Mapped[list[DocParse]] = relationship(back_populates="doc_file", cascade="all, delete-orphan")
+    watermarks: Mapped[list[DocWatermark]] = relationship(back_populates="doc_file", cascade="all, delete-orphan")
+    extractions: Mapped[list[DocExtraction]] = relationship(back_populates="doc_file", cascade="all, delete-orphan")
 
 
 class DocParse(Base):
@@ -57,8 +67,8 @@ class DocParse(Base):
     doc_file_id: Mapped[int] = mapped_column(ForeignKey("doc_file.id", ondelete="CASCADE"))
     parse_mode: Mapped[str] = mapped_column(String(50), default="auto")
     status: Mapped[str] = mapped_column(String(20), default="pending", comment="pending/running/completed/failed")
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[int | None] = mapped_column(BigInteger)
+    completed_at: Mapped[int | None] = mapped_column(BigInteger)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     textin_request_id: Mapped[str | None] = mapped_column(String(255))
 
@@ -73,6 +83,7 @@ class DocParse(Base):
     has_chart: Mapped[bool | None] = mapped_column(default=False)
     page_count: Mapped[int | None] = mapped_column(Integer)
     valid_page_count: Mapped[int | None] = mapped_column(Integer)
+    src_page_count: Mapped[int | None] = mapped_column(Integer)
     error_message: Mapped[str | None] = mapped_column(Text)
 
     # Exact params sent to TextIn for reproducibility
@@ -105,3 +116,55 @@ class DocElement(Base):
     table_cells: Mapped[dict | None] = mapped_column(JSONB)
 
     doc_parse: Mapped[DocParse] = relationship(back_populates="elements")
+
+
+class DocWatermark(Base):
+    """One row per watermark removal invocation (Step 1)."""
+
+    __tablename__ = "doc_watermark"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    doc_file_id: Mapped[int] = mapped_column(ForeignKey("doc_file.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(20), default="pending", comment="pending/running/completed/failed")
+    started_at: Mapped[int | None] = mapped_column(BigInteger)
+    completed_at: Mapped[int | None] = mapped_column(BigInteger)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    cleaned_file_path: Mapped[str | None] = mapped_column(String(1024))
+    pages_cleaned: Mapped[int | None] = mapped_column(Integer)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    watermark_config: Mapped[dict | None] = mapped_column(JSONB)
+
+    doc_file: Mapped[DocFile] = relationship(back_populates="watermarks")
+
+
+class DocExtraction(Base):
+    """One row per entity extraction invocation (Step 3)."""
+
+    __tablename__ = "doc_extraction"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    doc_file_id: Mapped[int] = mapped_column(ForeignKey("doc_file.id", ondelete="CASCADE"))
+    doc_parse_id: Mapped[int | None] = mapped_column(ForeignKey("doc_parse.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(20), default="pending", comment="pending/running/completed/failed")
+    started_at: Mapped[int | None] = mapped_column(BigInteger)
+    completed_at: Mapped[int | None] = mapped_column(BigInteger)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    textin_request_id: Mapped[str | None] = mapped_column(String(255))
+
+    # Extracted fields
+    title: Mapped[str | None] = mapped_column(String(1024))
+    broker: Mapped[str | None] = mapped_column(String(255))
+    authors: Mapped[str | None] = mapped_column(String(1024))
+    publish_date: Mapped[int | None] = mapped_column(BigInteger)
+    market: Mapped[str | None] = mapped_column(String(255))
+    sector: Mapped[str | None] = mapped_column(String(255))
+    document_type: Mapped[str | None] = mapped_column(String(255))
+    target_company: Mapped[str | None] = mapped_column(String(255))
+    ticker_symbol: Mapped[str | None] = mapped_column(String(50))
+
+    # Storage
+    extraction_json_path: Mapped[str | None] = mapped_column(String(1024))
+    extraction_config: Mapped[dict | None] = mapped_column(JSONB)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    doc_file: Mapped[DocFile] = relationship(back_populates="extractions")

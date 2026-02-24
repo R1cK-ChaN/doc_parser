@@ -7,7 +7,25 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doc_parser.models import DocElement, DocFile, DocParse
+from doc_parser.models import (
+    DocElement,
+    DocExtraction,
+    DocFile,
+    DocParse,
+    DocWatermark,
+    epoch_now,
+)
+
+
+# ---------------------------------------------------------------------------
+# epoch_now helper
+# ---------------------------------------------------------------------------
+
+def test_epoch_now_returns_int():
+    """epoch_now() returns a positive integer."""
+    ts = epoch_now()
+    assert isinstance(ts, int)
+    assert ts > 0
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +62,51 @@ async def test_docfile_unique_file_id(async_session: AsyncSession):
         await async_session.flush()
 
 
+@pytest.mark.asyncio
+async def test_docfile_new_columns(async_session: AsyncSession):
+    """DocFile has new metadata columns for query convenience."""
+    df = DocFile(
+        file_id="local:meta.pdf",
+        sha256="b" * 64,
+        source="local",
+        file_name="meta.pdf",
+        market="US",
+        sector="Technology",
+        document_type="Research Report",
+        target_company="Apple Inc",
+        ticker_symbol="AAPL",
+        authors="John Doe, Jane Smith",
+    )
+    async_session.add(df)
+    await async_session.flush()
+
+    result = await async_session.execute(select(DocFile).where(DocFile.file_id == "local:meta.pdf"))
+    row = result.scalar_one()
+    assert row.market == "US"
+    assert row.ticker_symbol == "AAPL"
+    assert row.authors == "John Doe, Jane Smith"
+
+
+@pytest.mark.asyncio
+async def test_docfile_epoch_timestamps(async_session: AsyncSession):
+    """DocFile uses BigInteger epoch timestamps."""
+    df = DocFile(
+        file_id="local:epoch.pdf",
+        sha256="c" * 64,
+        source="local",
+        file_name="epoch.pdf",
+        publish_date=1700000000,
+        created_at=1700000000,
+    )
+    async_session.add(df)
+    await async_session.flush()
+
+    result = await async_session.execute(select(DocFile).where(DocFile.file_id == "local:epoch.pdf"))
+    row = result.scalar_one()
+    assert row.publish_date == 1700000000
+    assert isinstance(row.created_at, int)
+
+
 # ---------------------------------------------------------------------------
 # DocParse linked to DocFile
 # ---------------------------------------------------------------------------
@@ -63,6 +126,22 @@ async def test_docparse_linked_to_docfile(async_session: AsyncSession):
     row = result.scalar_one()
     assert row.status == "completed"
     assert row.doc_file_id == df.id
+
+
+@pytest.mark.asyncio
+async def test_docparse_src_page_count(async_session: AsyncSession):
+    """DocParse has src_page_count column."""
+    df = DocFile(file_id="f-src", sha256="d" * 64, source="local", file_name="src.pdf")
+    async_session.add(df)
+    await async_session.flush()
+
+    dp = DocParse(doc_file_id=df.id, parse_mode="auto", status="completed", src_page_count=10)
+    async_session.add(dp)
+    await async_session.flush()
+
+    result = await async_session.execute(select(DocParse).where(DocParse.doc_file_id == df.id))
+    row = result.scalar_one()
+    assert row.src_page_count == 10
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +176,95 @@ async def test_docelement_jsonb_fields(async_session: AsyncSession):
 
 
 # ---------------------------------------------------------------------------
+# DocWatermark
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_docwatermark_create(async_session: AsyncSession):
+    """DocWatermark can be created and linked to DocFile."""
+    df = DocFile(file_id="f-wm", sha256="e" * 64, source="local", file_name="wm.pdf")
+    async_session.add(df)
+    await async_session.flush()
+
+    wm = DocWatermark(
+        doc_file_id=df.id,
+        status="completed",
+        started_at=1700000000,
+        completed_at=1700000010,
+        duration_ms=2000,
+        cleaned_file_path="eeee/e" * 10 + "/1/cleaned.jpg",
+        pages_cleaned=1,
+    )
+    async_session.add(wm)
+    await async_session.flush()
+
+    result = await async_session.execute(select(DocWatermark).where(DocWatermark.doc_file_id == df.id))
+    row = result.scalar_one()
+    assert row.status == "completed"
+    assert row.duration_ms == 2000
+    assert row.pages_cleaned == 1
+
+
+# ---------------------------------------------------------------------------
+# DocExtraction
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_docextraction_create(async_session: AsyncSession):
+    """DocExtraction can be created with all extracted fields."""
+    df = DocFile(file_id="f-ext", sha256="f" * 64, source="local", file_name="ext.pdf")
+    async_session.add(df)
+    await async_session.flush()
+
+    ext = DocExtraction(
+        doc_file_id=df.id,
+        status="completed",
+        title="Market Analysis Report",
+        broker="Goldman Sachs",
+        authors="John Doe",
+        publish_date=1700000000,
+        market="US",
+        sector="Technology",
+        document_type="Research Report",
+        target_company="Apple Inc",
+        ticker_symbol="AAPL",
+    )
+    async_session.add(ext)
+    await async_session.flush()
+
+    result = await async_session.execute(select(DocExtraction).where(DocExtraction.doc_file_id == df.id))
+    row = result.scalar_one()
+    assert row.title == "Market Analysis Report"
+    assert row.broker == "Goldman Sachs"
+    assert row.ticker_symbol == "AAPL"
+    assert row.publish_date == 1700000000
+
+
+@pytest.mark.asyncio
+async def test_docextraction_linked_to_parse(async_session: AsyncSession):
+    """DocExtraction can optionally link to a DocParse."""
+    df = DocFile(file_id="f-ext2", sha256="0" * 64, source="local", file_name="ext2.pdf")
+    async_session.add(df)
+    await async_session.flush()
+
+    dp = DocParse(doc_file_id=df.id, parse_mode="auto", status="completed")
+    async_session.add(dp)
+    await async_session.flush()
+
+    ext = DocExtraction(
+        doc_file_id=df.id,
+        doc_parse_id=dp.id,
+        status="completed",
+    )
+    async_session.add(ext)
+    await async_session.flush()
+
+    result = await async_session.execute(select(DocExtraction).where(DocExtraction.doc_file_id == df.id))
+    row = result.scalar_one()
+    assert row.doc_parse_id == dp.id
+
+
+# ---------------------------------------------------------------------------
 # Relationship back-populates
 # ---------------------------------------------------------------------------
 
@@ -123,3 +291,20 @@ async def test_relationship_back_populates(async_session: AsyncSession):
     assert df.parses[0].id == dp.id
     assert len(dp.elements) == 1
     assert dp.elements[0].text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_watermark_extraction_relationships(async_session: AsyncSession):
+    """DocFile.watermarks and DocFile.extractions back-populate."""
+    df = DocFile(file_id="f-rel", sha256="1" * 64, source="local", file_name="rel.pdf")
+    async_session.add(df)
+    await async_session.flush()
+
+    wm = DocWatermark(doc_file_id=df.id, status="completed")
+    ext = DocExtraction(doc_file_id=df.id, status="completed")
+    async_session.add_all([wm, ext])
+    await async_session.flush()
+
+    await async_session.refresh(df, ["watermarks", "extractions"])
+    assert len(df.watermarks) == 1
+    assert len(df.extractions) == 1

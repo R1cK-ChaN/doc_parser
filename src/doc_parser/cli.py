@@ -45,6 +45,11 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     ctx.obj["verbose"] = verbose
 
 
+# ---------------------------------------------------------------------------
+# init-db
+# ---------------------------------------------------------------------------
+
+
 @cli.command("init-db")
 def init_db() -> None:
     """Create PostgreSQL tables via Alembic migration."""
@@ -60,6 +65,86 @@ def init_db() -> None:
     else:
         console.print(f"[red]Migration failed:[/red]\n{result.stderr}")
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Step 1: Watermark removal
+# ---------------------------------------------------------------------------
+
+
+@cli.command("remove-watermark")
+@click.argument("file_id", type=int)
+@click.option("--force", is_flag=True, help="Re-run even if already completed.")
+def remove_watermark(file_id: int, force: bool) -> None:
+    """Remove watermark from a document (Step 1)."""
+    from doc_parser.steps import run_watermark_removal
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    result = asyncio.run(run_watermark_removal(settings, file_id, force=force))
+
+    if result:
+        console.print(f"[green]Watermark removed.[/green] doc_watermark.id={result}")
+    else:
+        console.print("[yellow]Skipped (already completed or failed).[/yellow]")
+
+
+@cli.command("remove-watermark-folder")
+@click.argument("folder_id")
+@click.option("--force", is_flag=True, help="Re-run even if already completed.")
+def remove_watermark_folder(folder_id: str, force: bool) -> None:
+    """Remove watermarks from all files in a Google Drive folder (Step 1)."""
+    from doc_parser.pipeline import _ensure_drive_doc_files
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    async def _run():
+        doc_file_ids = await _ensure_drive_doc_files(settings, folder_id)
+        results = []
+        for dfid in doc_file_ids:
+            from doc_parser.steps import run_watermark_removal
+            r = await run_watermark_removal(settings, dfid, force=force)
+            results.append(r)
+        return results
+
+    results = asyncio.run(_run())
+    done = sum(1 for r in results if r is not None)
+    skipped = sum(1 for r in results if r is None)
+    console.print(f"\n[green]Done.[/green] Processed: {done}, Skipped: {skipped}")
+
+
+# ---------------------------------------------------------------------------
+# Step 2: Parse
+# ---------------------------------------------------------------------------
+
+
+@cli.command("parse")
+@click.argument("file_id", type=int)
+@click.option("--force", is_flag=True, help="Re-parse even if already completed.")
+@click.option("--use-cleaned/--no-cleaned", default=True, help="Use cleaned file from watermark removal.")
+@click.option("--parse-mode", default=None, help="TextIn parse mode override.")
+@click.option("--no-excel", is_flag=True, help="Skip Excel extraction.")
+def parse(file_id: int, force: bool, use_cleaned: bool, parse_mode: str | None, no_excel: bool) -> None:
+    """Parse a document via ParseX (Step 2)."""
+    from doc_parser.steps import run_parse
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    result = asyncio.run(
+        run_parse(
+            settings, file_id,
+            use_cleaned=use_cleaned, force=force,
+            parse_mode=parse_mode, get_excel=not no_excel,
+        )
+    )
+
+    if result:
+        console.print(f"[green]Parse complete.[/green] doc_parse.id={result}")
+    else:
+        console.print("[yellow]Skipped (already parsed or failed).[/yellow]")
 
 
 @cli.command("parse-folder")
@@ -169,6 +254,104 @@ def parse_local(
         console.print("[yellow]File skipped (already parsed or failed).[/yellow]")
 
 
+# ---------------------------------------------------------------------------
+# Step 3: Entity extraction
+# ---------------------------------------------------------------------------
+
+
+@cli.command("extract")
+@click.argument("file_id", type=int)
+@click.option("--force", is_flag=True, help="Re-extract even if already completed.")
+def extract(file_id: int, force: bool) -> None:
+    """Extract structured entities from a document (Step 3)."""
+    from doc_parser.steps import run_extraction
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    result = asyncio.run(run_extraction(settings, file_id, force=force))
+
+    if result:
+        console.print(f"[green]Extraction complete.[/green] doc_extraction.id={result}")
+    else:
+        console.print("[yellow]Skipped (already completed or failed).[/yellow]")
+
+
+@cli.command("extract-folder")
+@click.argument("folder_id")
+@click.option("--force", is_flag=True, help="Re-extract even if already completed.")
+def extract_folder(folder_id: str, force: bool) -> None:
+    """Extract entities from all files in a Google Drive folder (Step 3)."""
+    from doc_parser.pipeline import _ensure_drive_doc_files
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    async def _run():
+        doc_file_ids = await _ensure_drive_doc_files(settings, folder_id)
+        results = []
+        for dfid in doc_file_ids:
+            from doc_parser.steps import run_extraction
+            r = await run_extraction(settings, dfid, force=force)
+            results.append(r)
+        return results
+
+    results = asyncio.run(_run())
+    done = sum(1 for r in results if r is not None)
+    skipped = sum(1 for r in results if r is None)
+    console.print(f"\n[green]Done.[/green] Extracted: {done}, Skipped: {skipped}")
+
+
+# ---------------------------------------------------------------------------
+# Full pipeline (all 3 steps)
+# ---------------------------------------------------------------------------
+
+
+@cli.command("run-all")
+@click.argument("file_id", type=int)
+@click.option("--force", is_flag=True, help="Force re-run all steps.")
+def run_all(file_id: int, force: bool) -> None:
+    """Run full pipeline: watermark → parse → extract (Steps 1+2+3)."""
+    from doc_parser.pipeline import run_all_steps
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    results = asyncio.run(run_all_steps(settings, file_id, force=force))
+
+    console.print(f"\n[bold]Pipeline Results:[/bold]")
+    for step, rid in results.items():
+        status = f"[green]{rid}[/green]" if rid else "[yellow]skipped/failed[/yellow]"
+        console.print(f"  {step}: {status}")
+
+
+@cli.command("run-all-folder")
+@click.argument("folder_id")
+@click.option("--force", is_flag=True, help="Force re-run all steps.")
+def run_all_folder(folder_id: str, force: bool) -> None:
+    """Run full pipeline for all files in a Google Drive folder."""
+    from doc_parser.pipeline import _ensure_drive_doc_files, run_all_steps
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    async def _run():
+        doc_file_ids = await _ensure_drive_doc_files(settings, folder_id)
+        all_results = []
+        for dfid in doc_file_ids:
+            r = await run_all_steps(settings, dfid, force=force)
+            all_results.append(r)
+        return all_results
+
+    all_results = asyncio.run(_run())
+    console.print(f"\n[green]Done.[/green] Processed {len(all_results)} files.")
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+
 @cli.command("list-files")
 @click.argument("folder_id")
 def list_files(folder_id: str) -> None:
@@ -195,11 +378,11 @@ def list_files(folder_id: str) -> None:
 
 @cli.command("status")
 def status() -> None:
-    """Show parse statistics from the database."""
+    """Show pipeline statistics from the database."""
     from sqlalchemy import func, select
 
     from doc_parser.db import get_session
-    from doc_parser.models import DocElement, DocFile, DocParse
+    from doc_parser.models import DocElement, DocExtraction, DocFile, DocParse, DocWatermark
 
     settings = _init_db_engine()
 
@@ -208,30 +391,63 @@ def status() -> None:
             files_count = (await session.execute(select(func.count(DocFile.id)))).scalar() or 0
             parses_count = (await session.execute(select(func.count(DocParse.id)))).scalar() or 0
             elements_count = (await session.execute(select(func.count(DocElement.id)))).scalar() or 0
+            watermarks_count = (await session.execute(select(func.count(DocWatermark.id)))).scalar() or 0
+            extractions_count = (await session.execute(select(func.count(DocExtraction.id)))).scalar() or 0
 
             # Parse status breakdown
-            status_rows = (
+            parse_status_rows = (
                 await session.execute(
                     select(DocParse.status, func.count(DocParse.id)).group_by(DocParse.status)
                 )
             ).all()
 
-            return files_count, parses_count, elements_count, status_rows
+            # Watermark status breakdown
+            wm_status_rows = (
+                await session.execute(
+                    select(DocWatermark.status, func.count(DocWatermark.id)).group_by(DocWatermark.status)
+                )
+            ).all()
 
-    files_count, parses_count, elements_count, status_rows = asyncio.run(_status())
+            # Extraction status breakdown
+            ext_status_rows = (
+                await session.execute(
+                    select(DocExtraction.status, func.count(DocExtraction.id)).group_by(DocExtraction.status)
+                )
+            ).all()
+
+            return (
+                files_count, parses_count, elements_count,
+                watermarks_count, extractions_count,
+                parse_status_rows, wm_status_rows, ext_status_rows,
+            )
+
+    (
+        files_count, parses_count, elements_count,
+        watermarks_count, extractions_count,
+        parse_status_rows, wm_status_rows, ext_status_rows,
+    ) = asyncio.run(_status())
 
     console.print(f"\n[bold]Database Statistics[/bold]")
-    console.print(f"  Files:    {files_count}")
-    console.print(f"  Parses:   {parses_count}")
-    console.print(f"  Elements: {elements_count}")
+    console.print(f"  Files:        {files_count}")
+    console.print(f"  Watermarks:   {watermarks_count}")
+    console.print(f"  Parses:       {parses_count}")
+    console.print(f"  Elements:     {elements_count}")
+    console.print(f"  Extractions:  {extractions_count}")
 
-    if status_rows:
-        console.print(f"\n[bold]Parse Status Breakdown[/bold]")
-        for s, count in status_rows:
-            color = {"completed": "green", "failed": "red", "running": "yellow"}.get(s, "white")
-            console.print(f"  [{color}]{s}[/{color}]: {count}")
+    _print_status_breakdown("Watermark Status", wm_status_rows)
+    _print_status_breakdown("Parse Status", parse_status_rows)
+    _print_status_breakdown("Extraction Status", ext_status_rows)
 
     console.print()
+
+
+def _print_status_breakdown(title: str, rows: list) -> None:
+    """Print a status breakdown section."""
+    if rows:
+        console.print(f"\n[bold]{title}[/bold]")
+        for s, count in rows:
+            color = {"completed": "green", "failed": "red", "running": "yellow"}.get(s, "white")
+            console.print(f"  [{color}]{s}[/{color}]: {count}")
 
 
 def _human_size(nbytes: int) -> str:

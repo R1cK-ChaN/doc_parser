@@ -1,4 +1,4 @@
-"""Orchestration: download → parse → store."""
+"""Orchestration: download → watermark removal → parse → extraction."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 import logging
 import mimetypes
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -15,11 +14,65 @@ from doc_parser.config import Settings
 from doc_parser.db import get_session
 from doc_parser.google_drive import DriveFile, GoogleDriveClient
 from doc_parser.hasher import sha256_file
-from doc_parser.models import DocElement, DocFile, DocParse
+from doc_parser.models import DocElement, DocFile, DocParse, epoch_now
+from doc_parser.steps import run_extraction, run_parse, run_watermark_removal
 from doc_parser.storage import store_parse_result
 from doc_parser.textin_client import TextInClient
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Full 3-step pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_all_steps(
+    settings: Settings,
+    doc_file_id: int,
+    *,
+    force: bool = False,
+) -> dict[str, int | None]:
+    """Run all 3 pipeline steps for a document file.
+
+    Step 1 failure is non-fatal (log warning, continue).
+    Step 3 failure is non-fatal (log warning, parse results still stored).
+
+    Returns dict with step result IDs.
+    """
+    results: dict[str, int | None] = {
+        "watermark_id": None,
+        "parse_id": None,
+        "extraction_id": None,
+    }
+
+    # Step 1: Watermark removal (non-fatal)
+    try:
+        results["watermark_id"] = await run_watermark_removal(
+            settings, doc_file_id, force=force,
+        )
+    except Exception as exc:
+        logger.warning("Step 1 (watermark) failed for doc_file_id=%d: %s", doc_file_id, exc)
+
+    # Step 2: Parse (critical)
+    results["parse_id"] = await run_parse(
+        settings, doc_file_id, use_cleaned=True, force=force,
+    )
+
+    # Step 3: Extraction (non-fatal)
+    try:
+        results["extraction_id"] = await run_extraction(
+            settings, doc_file_id, force=force,
+        )
+    except Exception as exc:
+        logger.warning("Step 3 (extraction) failed for doc_file_id=%d: %s", doc_file_id, exc)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Single file processing (ensures DocFile row exists first)
+# ---------------------------------------------------------------------------
 
 
 async def process_single_file(
@@ -142,7 +195,7 @@ async def _do_parse(
             doc_file_id=doc_file.id,
             parse_mode=parse_config.get("parse_mode", "auto"),
             status="running",
-            started_at=datetime.now(timezone.utc),
+            started_at=epoch_now(),
             parse_config=parse_config,
         )
         session.add(doc_parse)
@@ -158,7 +211,7 @@ async def _do_parse(
             )
         except Exception as exc:
             doc_parse.status = "failed"
-            doc_parse.completed_at = datetime.now(timezone.utc)
+            doc_parse.completed_at = epoch_now()
             doc_parse.error_message = str(exc)
             logger.error("Parse failed for %s: %s", file_name, exc)
             return None
@@ -170,7 +223,7 @@ async def _do_parse(
 
         # --- 8. Update doc_parse ---
         doc_parse.status = "completed"
-        doc_parse.completed_at = datetime.now(timezone.utc)
+        doc_parse.completed_at = epoch_now()
         doc_parse.duration_ms = parse_result.duration_ms
         doc_parse.textin_request_id = parse_result.request_id
         doc_parse.markdown_path = paths.get("markdown_path")
@@ -208,6 +261,87 @@ async def _do_parse(
             parse_result.total_page_number,
         )
         return doc_parse.id
+
+
+# ---------------------------------------------------------------------------
+# Ensure DocFile row exists (for step-based commands)
+# ---------------------------------------------------------------------------
+
+
+async def ensure_doc_file(
+    settings: Settings,
+    local_path: Path,
+) -> int:
+    """Ensure a DocFile row exists for a local file, return its ID."""
+    sha = sha256_file(local_path)
+    file_id = f"local:{local_path.name}"
+
+    async with get_session() as session:
+        stmt = select(DocFile).where(DocFile.file_id == file_id)
+        result = await session.execute(stmt)
+        doc_file = result.scalar_one_or_none()
+
+        if doc_file is None:
+            mime_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
+            doc_file = DocFile(
+                file_id=file_id,
+                sha256=sha,
+                source="local",
+                mime_type=mime_type,
+                file_name=local_path.name,
+                file_size_bytes=local_path.stat().st_size,
+                local_path=str(local_path),
+            )
+            session.add(doc_file)
+            await session.flush()
+        else:
+            doc_file.sha256 = sha
+            doc_file.local_path = str(local_path)
+            await session.flush()
+
+        return doc_file.id
+
+
+# ---------------------------------------------------------------------------
+# Batch processing (kept for backward compatibility)
+# ---------------------------------------------------------------------------
+
+
+async def _ensure_drive_doc_files(
+    settings: Settings,
+    folder_id: str,
+) -> list[int]:
+    """Ensure DocFile rows exist for all files in a Drive folder, return their IDs."""
+    drive = GoogleDriveClient(settings)
+    files = await drive.list_files(folder_id)
+
+    if not files:
+        logger.warning("No supported files found in folder %s", folder_id)
+        return []
+
+    doc_file_ids = []
+    async with get_session() as session:
+        for df in files:
+            stmt = select(DocFile).where(DocFile.file_id == df.file_id)
+            result = await session.execute(stmt)
+            doc_file = result.scalar_one_or_none()
+
+            if doc_file is None:
+                doc_file = DocFile(
+                    file_id=df.file_id,
+                    sha256="0" * 64,  # placeholder until actual file is processed
+                    source="drive",
+                    mime_type=df.mime_type,
+                    file_name=df.name,
+                    file_size_bytes=df.size,
+                    drive_folder_id=folder_id,
+                )
+                session.add(doc_file)
+                await session.flush()
+
+            doc_file_ids.append(doc_file.id)
+
+    return doc_file_ids
 
 
 async def process_folder(

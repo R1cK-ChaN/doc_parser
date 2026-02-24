@@ -66,7 +66,7 @@ async def async_session(async_engine):
 
 @pytest.fixture()
 def mock_get_session(async_engine):
-    """Patch get_session in pipeline and db modules to use the test SQLite engine."""
+    """Patch get_session in pipeline, db, and steps modules to use the test SQLite engine."""
     from contextlib import asynccontextmanager
 
     factory = async_sessionmaker(async_engine, expire_on_commit=False)
@@ -84,6 +84,9 @@ def mock_get_session(async_engine):
     with (
         patch("doc_parser.pipeline.get_session", _fake_get_session),
         patch("doc_parser.db.get_session", _fake_get_session),
+        patch("doc_parser.steps.step1_watermark.get_session", _fake_get_session),
+        patch("doc_parser.steps.step2_parse.get_session", _fake_get_session),
+        patch("doc_parser.steps.step3_extract.get_session", _fake_get_session),
     ):
         yield _fake_get_session
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -47,3 +48,43 @@ def store_parse_result(
         paths["excel_path"] = str(rel_root / "tables.xlsx")
 
     return paths
+
+
+def store_watermark_result(
+    base_dir: Path,
+    sha256: str,
+    watermark_id: int,
+    image_base64: str,
+) -> str:
+    """Write cleaned watermark image to disk and return relative path.
+
+    Layout: <base_dir>/<sha256[:4]>/<sha256>/<watermark_id>/cleaned.jpg
+    """
+    rel_root = Path(sha256[:4]) / sha256 / str(watermark_id)
+    out_dir = base_dir / rel_root
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cleaned_path = out_dir / "cleaned.jpg"
+    cleaned_path.write_bytes(base64.b64decode(image_base64))
+
+    return str(rel_root / "cleaned.jpg")
+
+
+def store_extraction_result(
+    base_dir: Path,
+    sha256: str,
+    extraction_id: int,
+    response_data: dict,
+) -> str:
+    """Write full extraction API response to disk and return relative path.
+
+    Layout: <base_dir>/<sha256[:4]>/<sha256>/<extraction_id>/extraction.json
+    """
+    rel_root = Path(sha256[:4]) / sha256 / str(extraction_id)
+    out_dir = base_dir / rel_root
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = out_dir / "extraction.json"
+    json_path.write_text(json.dumps(response_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return str(rel_root / "extraction.json")

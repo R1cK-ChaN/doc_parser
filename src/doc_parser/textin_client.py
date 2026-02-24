@@ -1,4 +1,4 @@
-"""TextIn xParse HTTP client (sync endpoint via httpx.AsyncClient)."""
+"""TextIn API client for watermark removal, ParseX, and entity extraction."""
 
 from __future__ import annotations
 
@@ -20,7 +20,18 @@ from doc_parser.config import Settings
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
 SYNC_ENDPOINT = "https://api.textin.com/ai/service/v1/pdf_to_markdown"
+WATERMARK_ENDPOINT = "https://api.textin.com/ai/service/v1/image/watermark_remove"
+PARSEX_ENDPOINT = "https://api.textin.com/ai/service/v1/x_to_markdown"
+EXTRACTION_ENDPOINT = "https://api.textin.com/ai/service/v2/entity_extraction"
+
+# ---------------------------------------------------------------------------
+# Default params
+# ---------------------------------------------------------------------------
 
 DEFAULT_PARAMS = {
     "parse_mode": "auto",
@@ -33,6 +44,35 @@ DEFAULT_PARAMS = {
     "table_flavor": "html",
     "dpi": "144",
 }
+
+DEFAULT_PARSEX_PARAMS = {
+    "pdf_parse_mode": "auto",
+    "remove_watermark": "0",
+    "md_detail": "2",
+    "md_table_flavor": "html",
+    "md_title": "1",
+    "pdf_dpi": "144",
+}
+
+# ---------------------------------------------------------------------------
+# Extraction field definitions
+# ---------------------------------------------------------------------------
+
+EXTRACTION_FIELDS = [
+    {"key": "title", "description": "Document title or report title"},
+    {"key": "broker", "description": "Brokerage firm or financial institution that published the report"},
+    {"key": "authors", "description": "Author names, analysts who wrote the report"},
+    {"key": "publish_date", "description": "Publication date of the report"},
+    {"key": "market", "description": "Target market (e.g., US, China, Hong Kong, Global)"},
+    {"key": "sector", "description": "Industry sector (e.g., Technology, Healthcare, Energy)"},
+    {"key": "document_type", "description": "Type of document (e.g., Research Report, Market Commentary, Earnings Review)"},
+    {"key": "target_company", "description": "Primary company being analyzed"},
+    {"key": "ticker_symbol", "description": "Stock ticker symbol of the target company"},
+]
+
+# ---------------------------------------------------------------------------
+# Result dataclasses
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -49,6 +89,34 @@ class ParseResult:
     duration_ms: int = 0
     request_id: str = ""
     has_chart: bool = False
+    paragraphs: list[dict[str, Any]] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    src_page_count: int = 0
+
+
+@dataclass
+class WatermarkResult:
+    """Result from watermark removal API."""
+
+    image_base64: str = ""
+    duration_ms: int = 0
+
+
+@dataclass
+class ExtractionResult:
+    """Result from entity extraction API."""
+
+    fields: dict[str, Any] = field(default_factory=dict)
+    category: dict[str, Any] = field(default_factory=dict)
+    detail_structure: list[dict[str, Any]] = field(default_factory=list)
+    page_count: int = 0
+    duration_ms: int = 0
+    request_id: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Retry helper
+# ---------------------------------------------------------------------------
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -60,8 +128,13 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+
 class TextInClient:
-    """Client for the TextIn xParse sync API."""
+    """Client for the TextIn API suite."""
 
     def __init__(self, settings: Settings) -> None:
         self.app_id = settings.textin_app_id
@@ -83,6 +156,10 @@ class TextInClient:
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+
+    # -------------------------------------------------------------------
+    # Legacy parse (kept for backward compatibility)
+    # -------------------------------------------------------------------
 
     def _build_params(
         self,
@@ -113,7 +190,7 @@ class TextInClient:
         get_excel: bool = True,
         apply_chart: bool = True,
     ) -> ParseResult:
-        """Parse a file via the TextIn sync endpoint.
+        """Parse a file via the TextIn sync endpoint (legacy).
 
         Sends the file as binary body (application/octet-stream)
         with config as query params.
@@ -163,6 +240,9 @@ class TextInClient:
             duration_ms=data.get("duration", 0),
             request_id=data.get("request_id", ""),
             has_chart=has_chart,
+            paragraphs=data.get("paragraphs", []),
+            metrics=data.get("metrics", {}),
+            src_page_count=data.get("src_page_count", 0),
         )
 
     def get_parse_config(
@@ -174,6 +254,186 @@ class TextInClient:
         """Return the params dict that would be sent — for DB storage."""
         return self._build_params(parse_mode, get_excel, apply_chart)
 
+    # -------------------------------------------------------------------
+    # Step 1: Watermark Removal
+    # -------------------------------------------------------------------
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=4, min=4, max=16),
+        retry=retry_if_exception(_is_retryable),
+        reraise=True,
+    )
+    async def remove_watermark(self, file_path: Path) -> WatermarkResult:
+        """Remove watermark from a file via TextIn watermark API.
+
+        Sends file as binary body, returns base64-encoded cleaned image.
+        """
+        file_bytes = file_path.read_bytes()
+        client = await self._get_client()
+        logger.info("Removing watermark from %s (%d bytes)", file_path.name, len(file_bytes))
+
+        resp = await client.post(
+            WATERMARK_ENDPOINT,
+            content=file_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        code = body.get("code", 0)
+        if code != 200:
+            msg = body.get("message", "Unknown TextIn error")
+            raise TextInAPIError(code, msg)
+
+        result_data = body.get("result", {})
+        return WatermarkResult(
+            image_base64=result_data.get("image", ""),
+            duration_ms=result_data.get("duration", 0),
+        )
+
+    # -------------------------------------------------------------------
+    # Step 2: ParseX (x_to_markdown)
+    # -------------------------------------------------------------------
+
+    def _build_parsex_params(
+        self,
+        parse_mode: str | None = None,
+        get_excel: bool = True,
+        md_detail: int = 2,
+    ) -> dict[str, str]:
+        """Build query params for ParseX endpoint."""
+        params = dict(DEFAULT_PARSEX_PARAMS)
+        if parse_mode:
+            params["pdf_parse_mode"] = parse_mode
+        if get_excel:
+            params["get_excel"] = "1"
+        else:
+            params["get_excel"] = "0"
+        params["md_detail"] = str(md_detail)
+        return params
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=4, min=4, max=16),
+        retry=retry_if_exception(_is_retryable),
+        reraise=True,
+    )
+    async def parse_file_x(
+        self,
+        file_path: Path,
+        *,
+        parse_mode: str | None = None,
+        get_excel: bool = True,
+        md_detail: int = 2,
+    ) -> ParseResult:
+        """Parse a file via the TextIn ParseX (x_to_markdown) endpoint.
+
+        Returns ParseResult with markdown, detail, pages, paragraphs, metrics.
+        """
+        params = self._build_parsex_params(parse_mode, get_excel, md_detail)
+        file_bytes = file_path.read_bytes()
+
+        client = await self._get_client()
+        logger.info("ParseX %s (%d bytes, mode=%s)", file_path.name, len(file_bytes), params["pdf_parse_mode"])
+
+        resp = await client.post(
+            PARSEX_ENDPOINT,
+            params=params,
+            content=file_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        code = body.get("code", 0)
+        if code != 200:
+            msg = body.get("message", "Unknown TextIn error")
+            raise TextInAPIError(code, msg)
+
+        result_data = body.get("result", {})
+        return self._parse_response(result_data, params)
+
+    def get_parsex_config(
+        self,
+        parse_mode: str | None = None,
+        get_excel: bool = True,
+        md_detail: int = 2,
+    ) -> dict[str, str]:
+        """Return the ParseX params dict — for DB storage."""
+        return self._build_parsex_params(parse_mode, get_excel, md_detail)
+
+    # -------------------------------------------------------------------
+    # Step 3: Entity Extraction
+    # -------------------------------------------------------------------
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=4, min=4, max=16),
+        retry=retry_if_exception(_is_retryable),
+        reraise=True,
+    )
+    async def extract_entities(
+        self,
+        file_path: Path,
+        fields: list[dict[str, str]] | None = None,
+    ) -> ExtractionResult:
+        """Extract structured entities from a file via TextIn extraction API.
+
+        Sends JSON with base64-encoded file and field definitions.
+        """
+        file_bytes = file_path.read_bytes()
+        file_b64 = base64.b64encode(file_bytes).decode()
+        use_fields = fields or EXTRACTION_FIELDS
+
+        client = await self._get_client()
+        logger.info("Extracting entities from %s (%d bytes, %d fields)", file_path.name, len(file_bytes), len(use_fields))
+
+        payload = {
+            "file": file_b64,
+            "fields": use_fields,
+        }
+
+        resp = await client.post(
+            EXTRACTION_ENDPOINT,
+            json=payload,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        code = body.get("code", 0)
+        if code != 200:
+            msg = body.get("message", "Unknown TextIn error")
+            raise TextInAPIError(code, msg)
+
+        result_data = body.get("result", {})
+        return self._parse_extraction_response(result_data)
+
+    def _parse_extraction_response(self, data: dict[str, Any]) -> ExtractionResult:
+        """Convert the TextIn extraction response into an ExtractionResult."""
+        # Extract field values from the details structure
+        details = data.get("details", {})
+        fields: dict[str, Any] = {}
+        for key, entries in details.items():
+            if isinstance(entries, list) and entries:
+                fields[key] = entries[0].get("value", "")
+            elif isinstance(entries, dict):
+                fields[key] = entries.get("value", "")
+
+        return ExtractionResult(
+            fields=fields,
+            category=data.get("category", {}),
+            detail_structure=data.get("details_list", []),
+            page_count=data.get("page_count", 0),
+            duration_ms=data.get("duration", 0),
+            request_id=data.get("request_id", ""),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
 
 class TextInAPIError(Exception):
     """Raised when TextIn returns a non-200 code."""
@@ -182,6 +442,11 @@ class TextInAPIError(Exception):
         self.code = code
         self.message = message
         super().__init__(f"TextIn API error {code}: {message}")
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
 
 
 def decode_excel(b64: str) -> bytes:

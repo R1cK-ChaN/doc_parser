@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
-from doc_parser.storage import store_parse_result
+from doc_parser.storage import store_extraction_result, store_parse_result, store_watermark_result
 from doc_parser.textin_client import ParseResult
 
+
+# ---------------------------------------------------------------------------
+# store_parse_result
+# ---------------------------------------------------------------------------
 
 def test_directory_structure(tmp_path: Path, sample_parse_result: ParseResult):
     """Creates <sha[:4]>/<sha>/<parse_id>/ directory layout."""
@@ -81,3 +86,53 @@ def test_idempotent_overwrite(tmp_path: Path, sample_parse_result: ParseResult):
     store_parse_result(tmp_path, sha, 1, sample_parse_result)
     md_path = tmp_path / sha[:4] / sha / "1" / "output.md"
     assert md_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# store_watermark_result
+# ---------------------------------------------------------------------------
+
+def test_store_watermark_result(tmp_path: Path):
+    """Writes cleaned.jpg and returns relative path."""
+    sha = "a" * 64
+    image_b64 = base64.b64encode(b"fake-jpg-data").decode()
+    rel_path = store_watermark_result(tmp_path, sha, 42, image_b64)
+
+    assert rel_path == f"{sha[:4]}/{sha}/42/cleaned.jpg"
+    full_path = tmp_path / rel_path
+    assert full_path.exists()
+    assert full_path.read_bytes() == b"fake-jpg-data"
+
+
+def test_store_watermark_result_directory_layout(tmp_path: Path):
+    """Creates <sha[:4]>/<sha>/<wm_id>/ directory layout."""
+    sha = "b" * 64
+    image_b64 = base64.b64encode(b"img").decode()
+    store_watermark_result(tmp_path, sha, 1, image_b64)
+    expected_dir = tmp_path / sha[:4] / sha / "1"
+    assert expected_dir.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# store_extraction_result
+# ---------------------------------------------------------------------------
+
+def test_store_extraction_result(tmp_path: Path):
+    """Writes extraction.json and returns relative path."""
+    sha = "c" * 64
+    response_data = {"fields": {"title": "Report"}, "duration_ms": 100}
+    rel_path = store_extraction_result(tmp_path, sha, 7, response_data)
+
+    assert rel_path == f"{sha[:4]}/{sha}/7/extraction.json"
+    full_path = tmp_path / rel_path
+    assert full_path.exists()
+    data = json.loads(full_path.read_text(encoding="utf-8"))
+    assert data == response_data
+
+
+def test_store_extraction_result_directory_layout(tmp_path: Path):
+    """Creates <sha[:4]>/<sha>/<ext_id>/ directory layout."""
+    sha = "d" * 64
+    store_extraction_result(tmp_path, sha, 3, {"test": True})
+    expected_dir = tmp_path / sha[:4] / sha / "3"
+    assert expected_dir.is_dir()
