@@ -19,6 +19,15 @@ from doc_parser.textin_client import EXTRACTION_FIELDS
 
 logger = logging.getLogger(__name__)
 
+_WATERMARK_MARKERS = ("macroamy",)
+
+
+def _strip_watermark_lines(markdown: str) -> str:
+    """Remove lines that contain known watermark markers."""
+    lines = markdown.splitlines()
+    cleaned = [ln for ln in lines if not any(m in ln for m in _WATERMARK_MARKERS)]
+    return "\n".join(cleaned)
+
 
 def parse_date_to_epoch(date_str: str | None) -> int | None:
     """Parse a date string to Unix epoch seconds.
@@ -115,6 +124,7 @@ async def _do_extraction(
             md_file = settings.parsed_path / latest_parse.markdown_path
             if md_file.exists():
                 markdown = md_file.read_text(encoding="utf-8")
+                markdown = _strip_watermark_lines(markdown)
 
         # Create DocExtraction row
         extraction = DocExtraction(
