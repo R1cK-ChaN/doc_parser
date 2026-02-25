@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from doc_parser.config import Settings
 from doc_parser.db import get_session
-from doc_parser.models import DocElement, DocFile, DocParse, DocWatermark, epoch_now
+from doc_parser.models import DocElement, DocFile, DocParse, epoch_now
 from doc_parser.storage import store_parse_result
 from doc_parser.textin_client import TextInClient
 
@@ -20,7 +20,6 @@ async def run_parse(
     settings: Settings,
     doc_file_id: int,
     *,
-    use_cleaned: bool = True,
     force: bool = False,
     parse_mode: str | None = None,
     get_excel: bool = True,
@@ -29,7 +28,7 @@ async def run_parse(
     """Parse a document file via TextIn ParseX.
 
     1. Load DocFile
-    2. If use_cleaned: look for completed DocWatermark → use cleaned_file_path
+    2. Resolve file path
     3. Check for existing completed DocParse (skip if not force)
     4. Create DocParse row: status=running
     5. Call textin.parse_file_x()
@@ -43,7 +42,7 @@ async def run_parse(
     try:
         return await _do_parse(
             settings, textin, doc_file_id,
-            use_cleaned=use_cleaned, force=force,
+            force=force,
             parse_mode=parse_mode, get_excel=get_excel,
             md_detail=md_detail,
         )
@@ -56,7 +55,6 @@ async def _do_parse(
     textin: TextInClient,
     doc_file_id: int,
     *,
-    use_cleaned: bool = True,
     force: bool = False,
     parse_mode: str | None = None,
     get_excel: bool = True,
@@ -69,24 +67,8 @@ async def _do_parse(
             logger.error("DocFile id=%d not found", doc_file_id)
             return None
 
-        # Resolve file path: prefer cleaned file from Step 1 if available
-        file_path = None
-        if use_cleaned:
-            wm_result = await session.execute(
-                select(DocWatermark).where(
-                    DocWatermark.doc_file_id == doc_file_id,
-                    DocWatermark.status == "completed",
-                ).order_by(DocWatermark.id.desc()).limit(1)
-            )
-            wm = wm_result.scalar_one_or_none()
-            if wm and wm.cleaned_file_path:
-                cleaned = settings.watermark_path / wm.cleaned_file_path
-                if cleaned.exists():
-                    file_path = cleaned
-                    logger.info("Using cleaned file from watermark removal: %s", cleaned)
-
-        if file_path is None:
-            file_path = _resolve_file_path(doc_file)
+        # Resolve file path
+        file_path = _resolve_file_path(doc_file)
 
         if file_path is None or not file_path.exists():
             logger.error("Cannot resolve file path for DocFile id=%d", doc_file_id)

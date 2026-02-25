@@ -46,9 +46,8 @@ def test_help_output(runner: CliRunner):
 
 
 def test_help_shows_new_commands(runner: CliRunner):
-    """Help output includes new step commands."""
+    """Help output includes step commands."""
     result = runner.invoke(cli, ["--help"])
-    assert "remove-watermark" in result.output
     assert "extract" in result.output
     assert "run-all" in result.output
 
@@ -151,40 +150,6 @@ def test_parse_folder_success(runner: CliRunner):
 
 
 # ---------------------------------------------------------------------------
-# remove-watermark
-# ---------------------------------------------------------------------------
-
-def test_remove_watermark_success(runner: CliRunner):
-    """remove-watermark prints success with the doc_watermark ID."""
-    with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.steps.step1_watermark.run_watermark_removal", new_callable=AsyncMock, return_value=5),
-        patch("doc_parser.steps.run_watermark_removal", new_callable=AsyncMock, return_value=5),
-    ):
-        mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
-
-        result = runner.invoke(cli, ["remove-watermark", "1"])
-        assert result.exit_code == 0
-        assert "5" in result.output
-
-
-def test_remove_watermark_skipped(runner: CliRunner):
-    """remove-watermark shows skipped message when None."""
-    with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.steps.step1_watermark.run_watermark_removal", new_callable=AsyncMock, return_value=None),
-        patch("doc_parser.steps.run_watermark_removal", new_callable=AsyncMock, return_value=None),
-    ):
-        mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
-
-        result = runner.invoke(cli, ["remove-watermark", "1"])
-        assert result.exit_code == 0
-        assert "skipped" in result.output.lower() or "failed" in result.output.lower()
-
-
-# ---------------------------------------------------------------------------
 # extract
 # ---------------------------------------------------------------------------
 
@@ -230,7 +195,7 @@ def test_run_all_success(runner: CliRunner):
         patch(
             "doc_parser.pipeline.run_all_steps",
             new_callable=AsyncMock,
-            return_value={"watermark_id": 1, "parse_id": 2, "extraction_id": 3},
+            return_value={"parse_id": 2, "extraction_id": 3},
         ),
     ):
         mock_settings = MagicMock()

@@ -13,7 +13,7 @@ from doc_parser.extraction import (
     ExtractionProvider,
     create_extraction_provider,
 )
-from doc_parser.models import DocExtraction, DocFile, DocParse, DocWatermark, epoch_now
+from doc_parser.models import DocExtraction, DocFile, DocParse, epoch_now
 from doc_parser.storage import store_extraction_result
 from doc_parser.textin_client import EXTRACTION_FIELDS
 
@@ -91,22 +91,8 @@ async def _do_extraction(
                 logger.info("Skipping extraction for %s — already completed (use --force)", doc_file.file_name)
                 return None
 
-        # Resolve file path: prefer cleaned from Step 1
-        file_path = None
-        wm_result = await session.execute(
-            select(DocWatermark).where(
-                DocWatermark.doc_file_id == doc_file_id,
-                DocWatermark.status == "completed",
-            ).order_by(DocWatermark.id.desc()).limit(1)
-        )
-        wm = wm_result.scalar_one_or_none()
-        if wm and wm.cleaned_file_path:
-            cleaned = settings.watermark_path / wm.cleaned_file_path
-            if cleaned.exists():
-                file_path = cleaned
-
-        if file_path is None:
-            file_path = _resolve_file_path(doc_file)
+        # Resolve file path
+        file_path = _resolve_file_path(doc_file)
 
         if file_path is None or not file_path.exists():
             logger.error("Cannot resolve file path for DocFile id=%d", doc_file_id)

@@ -54,7 +54,6 @@ class DocFile(Base):
     authors: Mapped[str | None] = mapped_column(String(1024))
 
     parses: Mapped[list[DocParse]] = relationship(back_populates="doc_file", cascade="all, delete-orphan")
-    watermarks: Mapped[list[DocWatermark]] = relationship(back_populates="doc_file", cascade="all, delete-orphan")
     extractions: Mapped[list[DocExtraction]] = relationship(back_populates="doc_file", cascade="all, delete-orphan")
 
 
@@ -116,25 +115,6 @@ class DocElement(Base):
     table_cells: Mapped[dict | None] = mapped_column(JSONB)
 
     doc_parse: Mapped[DocParse] = relationship(back_populates="elements")
-
-
-class DocWatermark(Base):
-    """One row per watermark removal invocation (Step 1)."""
-
-    __tablename__ = "doc_watermark"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    doc_file_id: Mapped[int] = mapped_column(ForeignKey("doc_file.id", ondelete="CASCADE"))
-    status: Mapped[str] = mapped_column(String(20), default="pending", comment="pending/running/completed/failed")
-    started_at: Mapped[int | None] = mapped_column(BigInteger)
-    completed_at: Mapped[int | None] = mapped_column(BigInteger)
-    duration_ms: Mapped[int | None] = mapped_column(Integer)
-    cleaned_file_path: Mapped[str | None] = mapped_column(String(1024))
-    pages_cleaned: Mapped[int | None] = mapped_column(Integer)
-    error_message: Mapped[str | None] = mapped_column(Text)
-    watermark_config: Mapped[dict | None] = mapped_column(JSONB)
-
-    doc_file: Mapped[DocFile] = relationship(back_populates="watermarks")
 
 
 class DocExtraction(Base):

@@ -12,7 +12,6 @@ from doc_parser.models import (
     DocExtraction,
     DocFile,
     DocParse,
-    DocWatermark,
     epoch_now,
 )
 
@@ -176,36 +175,6 @@ async def test_docelement_jsonb_fields(async_session: AsyncSession):
 
 
 # ---------------------------------------------------------------------------
-# DocWatermark
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_docwatermark_create(async_session: AsyncSession):
-    """DocWatermark can be created and linked to DocFile."""
-    df = DocFile(file_id="f-wm", sha256="e" * 64, source="local", file_name="wm.pdf")
-    async_session.add(df)
-    await async_session.flush()
-
-    wm = DocWatermark(
-        doc_file_id=df.id,
-        status="completed",
-        started_at=1700000000,
-        completed_at=1700000010,
-        duration_ms=2000,
-        cleaned_file_path="eeee/e" * 10 + "/1/cleaned.jpg",
-        pages_cleaned=1,
-    )
-    async_session.add(wm)
-    await async_session.flush()
-
-    result = await async_session.execute(select(DocWatermark).where(DocWatermark.doc_file_id == df.id))
-    row = result.scalar_one()
-    assert row.status == "completed"
-    assert row.duration_ms == 2000
-    assert row.pages_cleaned == 1
-
-
-# ---------------------------------------------------------------------------
 # DocExtraction
 # ---------------------------------------------------------------------------
 
@@ -294,17 +263,15 @@ async def test_relationship_back_populates(async_session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_watermark_extraction_relationships(async_session: AsyncSession):
-    """DocFile.watermarks and DocFile.extractions back-populate."""
+async def test_extraction_relationships(async_session: AsyncSession):
+    """DocFile.extractions back-populates."""
     df = DocFile(file_id="f-rel", sha256="1" * 64, source="local", file_name="rel.pdf")
     async_session.add(df)
     await async_session.flush()
 
-    wm = DocWatermark(doc_file_id=df.id, status="completed")
     ext = DocExtraction(doc_file_id=df.id, status="completed")
-    async_session.add_all([wm, ext])
+    async_session.add(ext)
     await async_session.flush()
 
-    await async_session.refresh(df, ["watermarks", "extractions"])
-    assert len(df.watermarks) == 1
+    await async_session.refresh(df, ["extractions"])
     assert len(df.extractions) == 1

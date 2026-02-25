@@ -1,8 +1,7 @@
-"""Tests for doc_parser.steps — decoupled 3-step pipeline functions."""
+"""Tests for doc_parser.steps — decoupled 2-step pipeline functions."""
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,10 +14,8 @@ from doc_parser.models import (
     DocExtraction,
     DocFile,
     DocParse,
-    DocWatermark,
     epoch_now,
 )
-from doc_parser.steps.step1_watermark import run_watermark_removal
 from doc_parser.steps.step2_parse import run_parse
 from doc_parser.extraction import TextInExtractionProvider
 from doc_parser.steps.step3_extract import run_extraction, parse_date_to_epoch
@@ -26,7 +23,6 @@ from doc_parser.textin_client import (
     ExtractionResult,
     ParseResult,
     TextInAPIError,
-    WatermarkResult,
 )
 
 
@@ -95,116 +91,7 @@ def test_parse_date_to_epoch_various_formats():
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Watermark Removal
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_step1_watermark_success(tmp_path: Path, async_engine, mock_get_session):
-    """Watermark removal creates DocWatermark row and writes cleaned file."""
-    settings = _make_settings(tmp_path)
-
-    # Create a local file that exists
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF test content")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
-
-    cleaned_b64 = base64.b64encode(b"cleaned-image-data").decode()
-
-    with patch("doc_parser.steps.step1_watermark.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.remove_watermark = AsyncMock(
-            return_value=WatermarkResult(image_base64=cleaned_b64, duration_ms=150)
-        )
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
-
-        result = await run_watermark_removal(settings, doc_file_id)
-        assert result is not None
-
-    # Verify DB row
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        wm = (await session.execute(select(DocWatermark))).scalar_one()
-        assert wm.status == "completed"
-        assert wm.duration_ms == 150
-        assert wm.cleaned_file_path is not None
-
-        # Verify file on disk
-        full_path = settings.watermark_path / wm.cleaned_file_path
-        assert full_path.exists()
-        assert full_path.read_bytes() == b"cleaned-image-data"
-
-
-@pytest.mark.asyncio
-async def test_step1_watermark_skip_existing(tmp_path: Path, async_engine, mock_get_session):
-    """Watermark removal is skipped if already completed."""
-    settings = _make_settings(tmp_path)
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF test")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
-
-    # Create a completed watermark row
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        wm = DocWatermark(
-            doc_file_id=doc_file_id,
-            status="completed",
-            cleaned_file_path="some/path.jpg",
-        )
-        session.add(wm)
-        await session.commit()
-
-    with patch("doc_parser.steps.step1_watermark.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
-
-        result = await run_watermark_removal(settings, doc_file_id)
-        assert result is None  # skipped
-
-
-@pytest.mark.asyncio
-async def test_step1_watermark_failure(tmp_path: Path, async_engine, mock_get_session):
-    """Watermark removal failure sets status=failed."""
-    settings = _make_settings(tmp_path)
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF test")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
-
-    with patch("doc_parser.steps.step1_watermark.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.remove_watermark = AsyncMock(
-            side_effect=TextInAPIError(500, "Server error")
-        )
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
-
-        result = await run_watermark_removal(settings, doc_file_id)
-        assert result is None
-
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        wm = (await session.execute(select(DocWatermark))).scalar_one()
-        assert wm.status == "failed"
-        assert "Server error" in wm.error_message
-
-
-@pytest.mark.asyncio
-async def test_step1_watermark_not_found(tmp_path: Path, async_engine, mock_get_session):
-    """Watermark removal returns None for nonexistent doc_file_id."""
-    settings = _make_settings(tmp_path)
-
-    with patch("doc_parser.steps.step1_watermark.TextInClient") as MockTextIn:
-        mock_instance = MagicMock()
-        mock_instance.close = AsyncMock()
-        MockTextIn.return_value = mock_instance
-
-        result = await run_watermark_removal(settings, 99999)
-        assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Step 2: Parse
+# Step 1: Parse
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio

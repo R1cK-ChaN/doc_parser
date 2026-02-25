@@ -1,8 +1,8 @@
-"""Three-step pipeline: watermark removal, ParseX, entity extraction.
+"""Two-step pipeline: ParseX and entity extraction.
 
 - Convert DateTime columns to BigInteger (epoch seconds)
 - Add new columns to doc_file and doc_parse
-- Create doc_watermark and doc_extraction tables
+- Create doc_extraction table
 
 Revision ID: 002
 Revises: 001
@@ -30,12 +30,15 @@ def upgrade() -> None:
         existing_type=sa.DateTime(timezone=True),
         postgresql_using="EXTRACT(EPOCH FROM publish_date)::bigint",
     )
+    # Drop server defaults before type conversion
+    op.alter_column("doc_file", "created_at", server_default=None, existing_type=sa.DateTime(timezone=True))
     op.alter_column(
         "doc_file", "created_at",
         type_=sa.BigInteger(),
         existing_type=sa.DateTime(timezone=True),
         postgresql_using="EXTRACT(EPOCH FROM created_at)::bigint",
     )
+    op.alter_column("doc_file", "updated_at", server_default=None, existing_type=sa.DateTime(timezone=True))
     op.alter_column(
         "doc_file", "updated_at",
         type_=sa.BigInteger(),
@@ -75,24 +78,7 @@ def upgrade() -> None:
     op.add_column("doc_parse", sa.Column("src_page_count", sa.Integer()))
 
     # -----------------------------------------------------------------------
-    # 5. Create doc_watermark table (Step 1)
-    # -----------------------------------------------------------------------
-    op.create_table(
-        "doc_watermark",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("doc_file_id", sa.Integer(), sa.ForeignKey("doc_file.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("status", sa.String(20), nullable=False, server_default="pending"),
-        sa.Column("started_at", sa.BigInteger()),
-        sa.Column("completed_at", sa.BigInteger()),
-        sa.Column("duration_ms", sa.Integer()),
-        sa.Column("cleaned_file_path", sa.String(1024)),
-        sa.Column("pages_cleaned", sa.Integer()),
-        sa.Column("error_message", sa.Text()),
-        sa.Column("watermark_config", JSONB()),
-    )
-
-    # -----------------------------------------------------------------------
-    # 6. Create doc_extraction table (Step 3)
+    # 5. Create doc_extraction table
     # -----------------------------------------------------------------------
     op.create_table(
         "doc_extraction",
@@ -121,7 +107,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("doc_extraction")
-    op.drop_table("doc_watermark")
 
     op.drop_column("doc_parse", "src_page_count")
 

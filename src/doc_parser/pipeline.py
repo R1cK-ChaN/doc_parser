@@ -1,4 +1,4 @@
-"""Orchestration: download → watermark removal → parse → extraction."""
+"""Orchestration: download → parse → extraction."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from doc_parser.db import get_session
 from doc_parser.google_drive import DriveFile, GoogleDriveClient
 from doc_parser.hasher import sha256_file
 from doc_parser.models import DocElement, DocFile, DocParse, epoch_now
-from doc_parser.steps import run_extraction, run_parse, run_watermark_removal
+from doc_parser.steps import run_extraction, run_parse
 from doc_parser.storage import store_parse_result
 from doc_parser.textin_client import TextInClient
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Full 3-step pipeline
+# Full 2-step pipeline
 # ---------------------------------------------------------------------------
 
 
@@ -33,39 +33,30 @@ async def run_all_steps(
     *,
     force: bool = False,
 ) -> dict[str, int | None]:
-    """Run all 3 pipeline steps for a document file.
+    """Run all pipeline steps for a document file.
 
-    Step 1 failure is non-fatal (log warning, continue).
-    Step 3 failure is non-fatal (log warning, parse results still stored).
+    Step 2 (parse) failure is critical — stops pipeline.
+    Step 3 (extraction) failure is non-fatal (log warning, parse results still stored).
 
     Returns dict with step result IDs.
     """
     results: dict[str, int | None] = {
-        "watermark_id": None,
         "parse_id": None,
         "extraction_id": None,
     }
 
-    # Step 1: Watermark removal (non-fatal)
-    try:
-        results["watermark_id"] = await run_watermark_removal(
-            settings, doc_file_id, force=force,
-        )
-    except Exception as exc:
-        logger.warning("Step 1 (watermark) failed for doc_file_id=%d: %s", doc_file_id, exc)
-
-    # Step 2: Parse (critical)
+    # Step 1: Parse (critical)
     results["parse_id"] = await run_parse(
-        settings, doc_file_id, use_cleaned=True, force=force,
+        settings, doc_file_id, force=force,
     )
 
-    # Step 3: Extraction (non-fatal)
+    # Step 2: Extraction (non-fatal)
     try:
         results["extraction_id"] = await run_extraction(
             settings, doc_file_id, force=force,
         )
     except Exception as exc:
-        logger.warning("Step 3 (extraction) failed for doc_file_id=%d: %s", doc_file_id, exc)
+        logger.warning("Extraction failed for doc_file_id=%d: %s", doc_file_id, exc)
 
     return results
 

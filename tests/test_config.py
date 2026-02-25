@@ -29,16 +29,6 @@ def test_parsed_path_computed(tmp_path: Path):
     assert s.parsed_path == tmp_path / "data" / "parsed"
 
 
-def test_watermark_path_computed(tmp_path: Path):
-    """watermark_path is data_dir / 'watermark'."""
-    s = Settings(
-        textin_app_id="a",
-        textin_secret_code="s",
-        data_dir=tmp_path / "data",
-    )
-    assert s.watermark_path == tmp_path / "data" / "watermark"
-
-
 def test_extraction_path_computed(tmp_path: Path):
     """extraction_path is data_dir / 'extraction'."""
     s = Settings(
@@ -57,11 +47,9 @@ def test_ensure_dirs_creates_directory(tmp_path: Path):
         data_dir=tmp_path / "data",
     )
     assert not s.parsed_path.exists()
-    assert not s.watermark_path.exists()
     assert not s.extraction_path.exists()
     s.ensure_dirs()
     assert s.parsed_path.is_dir()
-    assert s.watermark_path.is_dir()
     assert s.extraction_path.is_dir()
 
 

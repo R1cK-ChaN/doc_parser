@@ -1,4 +1,4 @@
-"""TextIn API client for watermark removal, ParseX, and entity extraction."""
+"""TextIn API client for ParseX and entity extraction."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SYNC_ENDPOINT = "https://api.textin.com/ai/service/v1/pdf_to_markdown"
-WATERMARK_ENDPOINT = "https://api.textin.com/ai/service/v1/image/watermark_remove"
 PARSEX_ENDPOINT = "https://api.textin.com/ai/service/v1/x_to_markdown"
 EXTRACTION_ENDPOINT = "https://api.textin.com/ai/service/v2/entity_extraction"
 
@@ -92,14 +91,6 @@ class ParseResult:
     paragraphs: list[dict[str, Any]] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     src_page_count: int = 0
-
-
-@dataclass
-class WatermarkResult:
-    """Result from watermark removal API."""
-
-    image_base64: str = ""
-    duration_ms: int = 0
 
 
 @dataclass
@@ -253,44 +244,6 @@ class TextInClient:
     ) -> dict[str, str]:
         """Return the params dict that would be sent — for DB storage."""
         return self._build_params(parse_mode, get_excel, apply_chart)
-
-    # -------------------------------------------------------------------
-    # Step 1: Watermark Removal
-    # -------------------------------------------------------------------
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=4, min=4, max=16),
-        retry=retry_if_exception(_is_retryable),
-        reraise=True,
-    )
-    async def remove_watermark(self, file_path: Path) -> WatermarkResult:
-        """Remove watermark from a file via TextIn watermark API.
-
-        Sends file as binary body, returns base64-encoded cleaned image.
-        """
-        file_bytes = file_path.read_bytes()
-        client = await self._get_client()
-        logger.info("Removing watermark from %s (%d bytes)", file_path.name, len(file_bytes))
-
-        resp = await client.post(
-            WATERMARK_ENDPOINT,
-            content=file_bytes,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        resp.raise_for_status()
-        body = resp.json()
-
-        code = body.get("code", 0)
-        if code != 200:
-            msg = body.get("message", "Unknown TextIn error")
-            raise TextInAPIError(code, msg)
-
-        result_data = body.get("result", {})
-        return WatermarkResult(
-            image_base64=result_data.get("image", ""),
-            duration_ms=result_data.get("duration", 0),
-        )
 
     # -------------------------------------------------------------------
     # Step 2: ParseX (x_to_markdown)

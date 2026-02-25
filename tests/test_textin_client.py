@@ -18,7 +18,6 @@ from doc_parser.textin_client import (
     ParseResult,
     TextInAPIError,
     TextInClient,
-    WatermarkResult,
     _is_retryable,
     decode_excel,
 )
@@ -284,15 +283,8 @@ def test_extraction_fields_defined():
 
 
 # ---------------------------------------------------------------------------
-# WatermarkResult / ExtractionResult dataclasses
+# ExtractionResult dataclass
 # ---------------------------------------------------------------------------
-
-def test_watermark_result_defaults():
-    """WatermarkResult has expected defaults."""
-    wr = WatermarkResult()
-    assert wr.image_base64 == ""
-    assert wr.duration_ms == 0
-
 
 def test_extraction_result_defaults():
     """ExtractionResult has expected defaults."""
@@ -383,62 +375,6 @@ async def test_parse_file_http_error(tmp_path: Path):
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.parse_file(pdf)
-
-
-# ---------------------------------------------------------------------------
-# remove_watermark (mocked httpx)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_remove_watermark_success(tmp_path: Path):
-    """remove_watermark returns WatermarkResult on success."""
-    client = _make_client()
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF-1.4 test")
-
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "code": 200,
-        "result": {
-            "image": base64.b64encode(b"cleaned-image").decode(),
-            "duration": 150,
-        },
-    }
-
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    mock_http.is_closed = False
-    client._client = mock_http
-
-    result = await client.remove_watermark(pdf)
-    assert isinstance(result, WatermarkResult)
-    assert result.image_base64 == base64.b64encode(b"cleaned-image").decode()
-    assert result.duration_ms == 150
-
-
-@pytest.mark.asyncio
-async def test_remove_watermark_error(tmp_path: Path):
-    """remove_watermark raises TextInAPIError on failure."""
-    client = _make_client()
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF-1.4 test")
-
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "code": 40001,
-        "message": "Bad image",
-    }
-
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    mock_http.is_closed = False
-    client._client = mock_http
-
-    with pytest.raises(TextInAPIError) as exc_info:
-        await client.remove_watermark(pdf)
-    assert exc_info.value.code == 40001
 
 
 # ---------------------------------------------------------------------------

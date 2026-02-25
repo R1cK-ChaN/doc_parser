@@ -84,7 +84,6 @@ def mock_get_session(async_engine):
     with (
         patch("doc_parser.pipeline.get_session", _fake_get_session),
         patch("doc_parser.db.get_session", _fake_get_session),
-        patch("doc_parser.steps.step1_watermark.get_session", _fake_get_session),
         patch("doc_parser.steps.step2_parse.get_session", _fake_get_session),
         patch("doc_parser.steps.step3_extract.get_session", _fake_get_session),
     ):

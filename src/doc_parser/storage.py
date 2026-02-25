@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 
@@ -48,26 +47,6 @@ def store_parse_result(
         paths["excel_path"] = str(rel_root / "tables.xlsx")
 
     return paths
-
-
-def store_watermark_result(
-    base_dir: Path,
-    sha256: str,
-    watermark_id: int,
-    image_base64: str,
-) -> str:
-    """Write cleaned watermark image to disk and return relative path.
-
-    Layout: <base_dir>/<sha256[:4]>/<sha256>/<watermark_id>/cleaned.jpg
-    """
-    rel_root = Path(sha256[:4]) / sha256 / str(watermark_id)
-    out_dir = base_dir / rel_root
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    cleaned_path = out_dir / "cleaned.jpg"
-    cleaned_path.write_bytes(base64.b64decode(image_base64))
-
-    return str(rel_root / "cleaned.jpg")
 
 
 def store_extraction_result(

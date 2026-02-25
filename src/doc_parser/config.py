@@ -51,18 +51,12 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def watermark_path(self) -> Path:
-        return self.data_dir / "watermark"
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
     def extraction_path(self) -> Path:
         return self.data_dir / "extraction"
 
     def ensure_dirs(self) -> None:
         """Create data directories if they don't exist."""
         self.parsed_path.mkdir(parents=True, exist_ok=True)
-        self.watermark_path.mkdir(parents=True, exist_ok=True)
         self.extraction_path.mkdir(parents=True, exist_ok=True)
 
 

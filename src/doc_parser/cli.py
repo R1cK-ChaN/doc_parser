@@ -68,66 +68,17 @@ def init_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Watermark removal
-# ---------------------------------------------------------------------------
-
-
-@cli.command("remove-watermark")
-@click.argument("file_id", type=int)
-@click.option("--force", is_flag=True, help="Re-run even if already completed.")
-def remove_watermark(file_id: int, force: bool) -> None:
-    """Remove watermark from a document (Step 1)."""
-    from doc_parser.steps import run_watermark_removal
-
-    settings = _init_db_engine()
-    settings.ensure_dirs()
-
-    result = asyncio.run(run_watermark_removal(settings, file_id, force=force))
-
-    if result:
-        console.print(f"[green]Watermark removed.[/green] doc_watermark.id={result}")
-    else:
-        console.print("[yellow]Skipped (already completed or failed).[/yellow]")
-
-
-@cli.command("remove-watermark-folder")
-@click.argument("folder_id")
-@click.option("--force", is_flag=True, help="Re-run even if already completed.")
-def remove_watermark_folder(folder_id: str, force: bool) -> None:
-    """Remove watermarks from all files in a Google Drive folder (Step 1)."""
-    from doc_parser.pipeline import _ensure_drive_doc_files
-
-    settings = _init_db_engine()
-    settings.ensure_dirs()
-
-    async def _run():
-        doc_file_ids = await _ensure_drive_doc_files(settings, folder_id)
-        results = []
-        for dfid in doc_file_ids:
-            from doc_parser.steps import run_watermark_removal
-            r = await run_watermark_removal(settings, dfid, force=force)
-            results.append(r)
-        return results
-
-    results = asyncio.run(_run())
-    done = sum(1 for r in results if r is not None)
-    skipped = sum(1 for r in results if r is None)
-    console.print(f"\n[green]Done.[/green] Processed: {done}, Skipped: {skipped}")
-
-
-# ---------------------------------------------------------------------------
-# Step 2: Parse
+# Step 1: Parse
 # ---------------------------------------------------------------------------
 
 
 @cli.command("parse")
 @click.argument("file_id", type=int)
 @click.option("--force", is_flag=True, help="Re-parse even if already completed.")
-@click.option("--use-cleaned/--no-cleaned", default=True, help="Use cleaned file from watermark removal.")
 @click.option("--parse-mode", default=None, help="TextIn parse mode override.")
 @click.option("--no-excel", is_flag=True, help="Skip Excel extraction.")
-def parse(file_id: int, force: bool, use_cleaned: bool, parse_mode: str | None, no_excel: bool) -> None:
-    """Parse a document via ParseX (Step 2)."""
+def parse(file_id: int, force: bool, parse_mode: str | None, no_excel: bool) -> None:
+    """Parse a document via ParseX (Step 1)."""
     from doc_parser.steps import run_parse
 
     settings = _init_db_engine()
@@ -136,7 +87,7 @@ def parse(file_id: int, force: bool, use_cleaned: bool, parse_mode: str | None, 
     result = asyncio.run(
         run_parse(
             settings, file_id,
-            use_cleaned=use_cleaned, force=force,
+            force=force,
             parse_mode=parse_mode, get_excel=not no_excel,
         )
     )
@@ -255,7 +206,7 @@ def parse_local(
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Entity extraction
+# Step 2: Entity extraction
 # ---------------------------------------------------------------------------
 
 
@@ -311,7 +262,7 @@ def extract_folder(folder_id: str, force: bool, provider: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Full pipeline (all 3 steps)
+# Full pipeline (all steps)
 # ---------------------------------------------------------------------------
 
 
@@ -321,7 +272,7 @@ def extract_folder(folder_id: str, force: bool, provider: str | None) -> None:
 @click.option("--provider", type=click.Choice(["textin", "llm"]), default=None,
               help="Extraction provider (overrides config).")
 def run_all(file_id: int, force: bool, provider: str | None) -> None:
-    """Run full pipeline: watermark → parse → extract (Steps 1+2+3)."""
+    """Run full pipeline: parse → extract (Steps 1+2)."""
     from doc_parser.pipeline import run_all_steps
 
     settings = _init_db_engine()
@@ -398,7 +349,7 @@ def status() -> None:
     from sqlalchemy import func, select
 
     from doc_parser.db import get_session
-    from doc_parser.models import DocElement, DocExtraction, DocFile, DocParse, DocWatermark
+    from doc_parser.models import DocElement, DocExtraction, DocFile, DocParse
 
     settings = _init_db_engine()
 
@@ -407,20 +358,12 @@ def status() -> None:
             files_count = (await session.execute(select(func.count(DocFile.id)))).scalar() or 0
             parses_count = (await session.execute(select(func.count(DocParse.id)))).scalar() or 0
             elements_count = (await session.execute(select(func.count(DocElement.id)))).scalar() or 0
-            watermarks_count = (await session.execute(select(func.count(DocWatermark.id)))).scalar() or 0
             extractions_count = (await session.execute(select(func.count(DocExtraction.id)))).scalar() or 0
 
             # Parse status breakdown
             parse_status_rows = (
                 await session.execute(
                     select(DocParse.status, func.count(DocParse.id)).group_by(DocParse.status)
-                )
-            ).all()
-
-            # Watermark status breakdown
-            wm_status_rows = (
-                await session.execute(
-                    select(DocWatermark.status, func.count(DocWatermark.id)).group_by(DocWatermark.status)
                 )
             ).all()
 
@@ -433,24 +376,22 @@ def status() -> None:
 
             return (
                 files_count, parses_count, elements_count,
-                watermarks_count, extractions_count,
-                parse_status_rows, wm_status_rows, ext_status_rows,
+                extractions_count,
+                parse_status_rows, ext_status_rows,
             )
 
     (
         files_count, parses_count, elements_count,
-        watermarks_count, extractions_count,
-        parse_status_rows, wm_status_rows, ext_status_rows,
+        extractions_count,
+        parse_status_rows, ext_status_rows,
     ) = asyncio.run(_status())
 
     console.print(f"\n[bold]Database Statistics[/bold]")
     console.print(f"  Files:        {files_count}")
-    console.print(f"  Watermarks:   {watermarks_count}")
     console.print(f"  Parses:       {parses_count}")
     console.print(f"  Elements:     {elements_count}")
     console.print(f"  Extractions:  {extractions_count}")
 
-    _print_status_breakdown("Watermark Status", wm_status_rows)
     _print_status_breakdown("Parse Status", parse_status_rows)
     _print_status_breakdown("Extraction Status", ext_status_rows)
 
