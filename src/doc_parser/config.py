@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_context_chars: int = 4000
 
+    # VLM chart summarization (empty = disabled)
+    vlm_model: str = ""
+    vlm_max_tokens: int = 300
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def parsed_path(self) -> Path:

@@ -85,6 +85,10 @@ class DocParse(Base):
     src_page_count: Mapped[int | None] = mapped_column(Integer)
     error_message: Mapped[str | None] = mapped_column(Text)
 
+    # Chart enhancement
+    enhanced_markdown_path: Mapped[str | None] = mapped_column(String(1024))
+    chart_count: Mapped[int | None] = mapped_column(Integer)
+
     # Exact params sent to TextIn for reproducibility
     parse_config: Mapped[dict | None] = mapped_column(JSONB)
 

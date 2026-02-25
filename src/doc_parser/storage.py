@@ -49,6 +49,26 @@ def store_parse_result(
     return paths
 
 
+def store_enhanced_markdown(
+    base_dir: Path,
+    sha256: str,
+    parse_id: int,
+    content: str,
+) -> str:
+    """Write enhanced markdown to disk and return relative path.
+
+    Layout: <base_dir>/<sha256[:4]>/<sha256>/<parse_id>/output_enhanced.md
+    """
+    rel_root = Path(sha256[:4]) / sha256 / str(parse_id)
+    out_dir = base_dir / rel_root
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    md_path = out_dir / "output_enhanced.md"
+    md_path.write_text(content, encoding="utf-8")
+
+    return str(rel_root / "output_enhanced.md")
+
+
 def store_extraction_result(
     base_dir: Path,
     sha256: str,

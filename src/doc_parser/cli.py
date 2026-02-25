@@ -206,6 +206,95 @@ def parse_local(
 
 
 # ---------------------------------------------------------------------------
+# Chart enhancement
+# ---------------------------------------------------------------------------
+
+
+@cli.command("enhance-charts")
+@click.argument("doc_file_id", type=int)
+def enhance_charts_cmd(doc_file_id: int) -> None:
+    """Retroactively enhance charts in an existing parse with VLM summaries."""
+    import json
+
+    from sqlalchemy import select
+
+    from doc_parser.chart_enhance import enhance_charts
+    from doc_parser.db import get_session
+    from doc_parser.models import DocFile, DocParse
+    from doc_parser.storage import store_enhanced_markdown
+
+    settings = _init_db_engine()
+    settings.ensure_dirs()
+
+    if not settings.vlm_model:
+        console.print("[red]VLM model not configured.[/red] Set VLM_MODEL in .env")
+        sys.exit(1)
+
+    async def _run():
+        async with get_session() as session:
+            doc_file = await session.get(DocFile, doc_file_id)
+            if doc_file is None:
+                console.print(f"[red]DocFile id={doc_file_id} not found.[/red]")
+                return
+
+            # Find the latest completed parse
+            result = await session.execute(
+                select(DocParse)
+                .where(
+                    DocParse.doc_file_id == doc_file_id,
+                    DocParse.status == "completed",
+                )
+                .order_by(DocParse.id.desc())
+                .limit(1)
+            )
+            doc_parse = result.scalar_one_or_none()
+            if doc_parse is None:
+                console.print("[red]No completed parse found.[/red]")
+                return
+
+            if not doc_parse.markdown_path:
+                console.print("[red]No markdown path on parse.[/red]")
+                return
+
+            # Load markdown and detail
+            md_full = settings.parsed_path / doc_parse.markdown_path
+            markdown = md_full.read_text(encoding="utf-8")
+
+            detail_full = settings.parsed_path / doc_parse.detail_json_path
+            detail = json.loads(detail_full.read_text(encoding="utf-8"))
+
+            # Resolve PDF path
+            file_path = doc_file.local_path
+            if not file_path:
+                console.print("[red]No local file path available.[/red]")
+                return
+
+            enhanced_md, chart_count = await enhance_charts(
+                file_path, markdown, detail, settings,
+            )
+
+            if chart_count == 0:
+                console.print("[yellow]No charts found to enhance.[/yellow]")
+                return
+
+            enh_path = store_enhanced_markdown(
+                settings.parsed_path,
+                doc_file.sha256,
+                doc_parse.id,
+                enhanced_md,
+            )
+            doc_parse.enhanced_markdown_path = enh_path
+            doc_parse.chart_count = chart_count
+
+        console.print(
+            f"[green]Enhanced {chart_count} chart(s).[/green] "
+            f"Saved to {enh_path}"
+        )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Step 2: Entity extraction
 # ---------------------------------------------------------------------------
 

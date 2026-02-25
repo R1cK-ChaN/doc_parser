@@ -10,7 +10,8 @@ from sqlalchemy import select
 from doc_parser.config import Settings
 from doc_parser.db import get_session
 from doc_parser.models import DocElement, DocFile, DocParse, epoch_now
-from doc_parser.storage import store_parse_result
+from doc_parser.chart_enhance import enhance_charts
+from doc_parser.storage import store_enhanced_markdown, store_parse_result
 from doc_parser.textin_client import TextInClient
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,37 @@ async def _do_parse(
             len(parse_result.detail),
             parse_result.total_page_number,
         )
+
+        # Chart enhancement via VLM (if configured and charts detected)
+        if settings.vlm_model and parse_result.has_chart:
+            try:
+                enhanced_md, chart_count = await enhance_charts(
+                    file_path,
+                    parse_result.markdown,
+                    parse_result.detail,
+                    settings,
+                )
+                if chart_count > 0:
+                    enh_path = store_enhanced_markdown(
+                        settings.parsed_path,
+                        doc_file.sha256,
+                        doc_parse.id,
+                        enhanced_md,
+                    )
+                    doc_parse.enhanced_markdown_path = enh_path
+                    doc_parse.chart_count = chart_count
+                    logger.info(
+                        "Enhanced %d chart(s) in %s",
+                        chart_count,
+                        doc_file.file_name,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Chart enhancement failed for %s: %s",
+                    doc_file.file_name,
+                    exc,
+                )
+
         return doc_parse.id
 
 
