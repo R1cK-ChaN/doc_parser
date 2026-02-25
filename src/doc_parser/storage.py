@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from doc_parser.textin_client import ParseResult, decode_excel
+from doc_parser.watermark import strip_watermark_lines
 
 
 def store_parse_result(
@@ -25,9 +26,9 @@ def store_parse_result(
 
     paths: dict[str, str] = {}
 
-    # Markdown
+    # Markdown (strip watermark lines before persisting)
     md_path = out_dir / "output.md"
-    md_path.write_text(result.markdown, encoding="utf-8")
+    md_path.write_text(strip_watermark_lines(result.markdown), encoding="utf-8")
     paths["markdown_path"] = str(rel_root / "output.md")
 
     # Detail JSON

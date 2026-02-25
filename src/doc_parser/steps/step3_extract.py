@@ -16,17 +16,9 @@ from doc_parser.extraction import (
 from doc_parser.models import DocExtraction, DocFile, DocParse, epoch_now
 from doc_parser.storage import store_extraction_result
 from doc_parser.textin_client import EXTRACTION_FIELDS
+from doc_parser.watermark import strip_watermark_lines
 
 logger = logging.getLogger(__name__)
-
-_WATERMARK_MARKERS = ("macroamy",)
-
-
-def _strip_watermark_lines(markdown: str) -> str:
-    """Remove lines that contain known watermark markers."""
-    lines = markdown.splitlines()
-    cleaned = [ln for ln in lines if not any(m in ln for m in _WATERMARK_MARKERS)]
-    return "\n".join(cleaned)
 
 
 def parse_date_to_epoch(date_str: str | None) -> int | None:
@@ -124,7 +116,7 @@ async def _do_extraction(
             md_file = settings.parsed_path / latest_parse.markdown_path
             if md_file.exists():
                 markdown = md_file.read_text(encoding="utf-8")
-                markdown = _strip_watermark_lines(markdown)
+                markdown = strip_watermark_lines(markdown)
 
         # Create DocExtraction row
         extraction = DocExtraction(
@@ -160,6 +152,7 @@ async def _do_extraction(
             "page_count": ext_result.page_count,
             "duration_ms": ext_result.duration_ms,
             "request_id": ext_result.request_id,
+            "markdown": markdown,
         }
         rel_path = store_extraction_result(
             settings.extraction_path,
@@ -175,6 +168,7 @@ async def _do_extraction(
         extraction.authors = extracted.get("authors")
         extraction.publish_date = parse_date_to_epoch(extracted.get("publish_date"))
         extraction.market = extracted.get("market")
+        extraction.asset_class = extracted.get("asset_class")
         extraction.sector = extracted.get("sector")
         extraction.document_type = extracted.get("document_type")
         extraction.target_company = extracted.get("target_company")
@@ -190,6 +184,7 @@ async def _do_extraction(
         doc_file.broker = extraction.broker or doc_file.broker
         doc_file.publish_date = extraction.publish_date or doc_file.publish_date
         doc_file.market = extraction.market or doc_file.market
+        doc_file.asset_class = extraction.asset_class or doc_file.asset_class
         doc_file.sector = extraction.sector or doc_file.sector
         doc_file.document_type = extraction.document_type or doc_file.document_type
         doc_file.target_company = extraction.target_company or doc_file.target_company

@@ -47,6 +47,7 @@ class DocFile(Base):
 
     # New fields for query convenience (backfilled from Step 3)
     market: Mapped[str | None] = mapped_column(String(255))
+    asset_class: Mapped[str | None] = mapped_column(String(255))
     sector: Mapped[str | None] = mapped_column(String(255))
     document_type: Mapped[str | None] = mapped_column(String(255))
     target_company: Mapped[str | None] = mapped_column(String(255))
@@ -143,6 +144,7 @@ class DocExtraction(Base):
     authors: Mapped[str | None] = mapped_column(String(1024))
     publish_date: Mapped[int | None] = mapped_column(BigInteger)
     market: Mapped[str | None] = mapped_column(String(255))
+    asset_class: Mapped[str | None] = mapped_column(String(255))
     sector: Mapped[str | None] = mapped_column(String(255))
     document_type: Mapped[str | None] = mapped_column(String(255))
     target_company: Mapped[str | None] = mapped_column(String(255))
