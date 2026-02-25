@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,27 @@ specific numbers unless they are clearly visible in the chart.\
 # ---------------------------------------------------------------------------
 # Core functions
 # ---------------------------------------------------------------------------
+
+
+def _gather_page_text(detail: list[dict[str, Any]], page_id: int) -> str:
+    """Collect text from non-image detail elements on the same page.
+
+    Returns concatenated text truncated to ~1000 characters.
+    """
+    parts: list[str] = []
+    for el in detail:
+        el_page = el.get("page_id") or el.get("page_number", 0)
+        if el_page != page_id:
+            continue
+        if el.get("type") in ("image",):
+            continue
+        text = el.get("text", "").strip()
+        if text:
+            parts.append(text)
+    combined = "\n".join(parts)
+    if len(combined) > 1000:
+        combined = combined[:1000]
+    return combined
 
 
 def extract_chart_image(
@@ -131,6 +154,7 @@ def _position_to_rect(
 async def summarize_chart(
     image_bytes: bytes,
     settings: Settings,
+    page_text: str = "",
 ) -> str:
     """Send a chart image to a VLM and return a text summary.
 
@@ -139,18 +163,25 @@ async def summarize_chart(
     """
     b64 = base64.b64encode(image_bytes).decode()
 
+    user_content: list[dict[str, Any]] = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        },
+    ]
+    if page_text:
+        user_content.append({
+            "type": "text",
+            "text": f"Surrounding text from the same page:\n{page_text}",
+        })
+
     payload = {
         "model": settings.vlm_model,
         "messages": [
             {"role": "system", "content": _CHART_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64}"},
-                    },
-                ],
+                "content": user_content,
             },
         ],
         "max_tokens": settings.vlm_max_tokens,
@@ -190,6 +221,28 @@ def replace_chart_table(
     """
     replacement = f"[Chart Summary] {summary}"
     return markdown.replace(hallucinated_html, replacement, 1)
+
+
+def strip_html_comment_watermarks(markdown: str) -> str:
+    """Remove HTML comments that appear 3+ times (repeated watermarks).
+
+    Single-occurrence comments are preserved as they may be meaningful.
+    """
+    comments = re.findall(r"<!--.*?-->", markdown, re.DOTALL)
+    if not comments:
+        return markdown
+
+    counts = Counter(comments)
+    for comment, count in counts.items():
+        if count >= 3:
+            # Remove the comment and any surrounding blank lines it creates
+            pattern = re.compile(
+                r"\n*" + re.escape(comment) + r"\n*",
+                re.DOTALL,
+            )
+            markdown = pattern.sub("\n", markdown)
+
+    return markdown.strip("\n") + "\n" if markdown.strip() else markdown
 
 
 async def enhance_charts(
@@ -250,7 +303,8 @@ async def enhance_charts(
                 pdf_path, page_index, position,
                 textin_page_size=textin_page_size,
             )
-            summary = await summarize_chart(image_bytes, settings)
+            page_text = _gather_page_text(detail, page_id)
+            summary = await summarize_chart(image_bytes, settings, page_text=page_text)
             enhanced = replace_chart_table(enhanced, text, summary)
             chart_count += 1
             logger.info(
@@ -265,4 +319,5 @@ async def enhance_charts(
                 exc,
             )
 
+    enhanced = strip_html_comment_watermarks(enhanced)
     return enhanced, chart_count

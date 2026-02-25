@@ -11,9 +11,11 @@ import pymupdf
 import pytest
 
 from doc_parser.chart_enhance import (
+    _gather_page_text,
     enhance_charts,
     extract_chart_image,
     replace_chart_table,
+    strip_html_comment_watermarks,
     summarize_chart,
 )
 from doc_parser.config import Settings
@@ -171,6 +173,108 @@ class TestReplaceChartTable:
 
 
 # ---------------------------------------------------------------------------
+# _gather_page_text
+# ---------------------------------------------------------------------------
+
+
+class TestGatherPageText:
+    def test_filters_by_page(self):
+        """Only elements from the target page are included."""
+        detail = [
+            {"type": "text", "text": "Page 1 text", "page_id": 1},
+            {"type": "text", "text": "Page 2 text", "page_id": 2},
+            {"type": "text", "text": "Also page 1", "page_id": 1},
+        ]
+        result = _gather_page_text(detail, 1)
+        assert "Page 1 text" in result
+        assert "Also page 1" in result
+        assert "Page 2 text" not in result
+
+    def test_excludes_image_elements(self):
+        """Image elements are skipped even if on the same page."""
+        detail = [
+            {"type": "text", "text": "Normal text", "page_id": 1},
+            {"type": "image", "sub_type": "chart", "text": "<table>...</table>", "page_id": 1},
+            {"type": "text", "text": "More text", "page_id": 1},
+        ]
+        result = _gather_page_text(detail, 1)
+        assert "Normal text" in result
+        assert "More text" in result
+        assert "<table>" not in result
+
+    def test_truncates_long_text(self):
+        """Output is truncated to ~1000 characters."""
+        detail = [
+            {"type": "text", "text": "A" * 1200, "page_id": 1},
+        ]
+        result = _gather_page_text(detail, 1)
+        assert len(result) <= 1000
+
+    def test_falls_back_to_page_number(self):
+        """Elements with page_number (no page_id) are matched."""
+        detail = [
+            {"type": "text", "text": "Found it", "page_number": 3},
+        ]
+        result = _gather_page_text(detail, 3)
+        assert "Found it" in result
+
+    def test_empty_when_no_matches(self):
+        """Returns empty string when no elements match."""
+        detail = [
+            {"type": "text", "text": "Wrong page", "page_id": 5},
+        ]
+        result = _gather_page_text(detail, 1)
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# strip_html_comment_watermarks
+# ---------------------------------------------------------------------------
+
+
+class TestStripHtmlCommentWatermarks:
+    def test_removes_repeated_comments(self):
+        """Comments appearing 3+ times are removed."""
+        wm = "<!-- macroamy watermark -->"
+        md = f"Hello\n{wm}\nWorld\n{wm}\nFoo\n{wm}\nBar"
+        result = strip_html_comment_watermarks(md)
+        assert wm not in result
+        assert "Hello" in result
+        assert "World" in result
+        assert "Bar" in result
+
+    def test_preserves_unique_comments(self):
+        """Comments appearing fewer than 3 times are kept."""
+        md = "Hello\n<!-- important note -->\nWorld"
+        result = strip_html_comment_watermarks(md)
+        assert "<!-- important note -->" in result
+
+    def test_mixed_repeated_and_unique(self):
+        """Only repeated comments are removed; unique ones stay."""
+        wm = "<!-- watermark -->"
+        unique = "<!-- keep this -->"
+        md = f"A\n{wm}\nB\n{unique}\nC\n{wm}\nD\n{wm}\nE"
+        result = strip_html_comment_watermarks(md)
+        assert wm not in result
+        assert unique in result
+        assert "A" in result
+        assert "E" in result
+
+    def test_no_comments(self):
+        """Markdown without comments is returned unchanged."""
+        md = "Just plain text\nwith lines"
+        result = strip_html_comment_watermarks(md)
+        assert result.strip() == md.strip()
+
+    def test_exactly_two_occurrences_kept(self):
+        """Comments appearing exactly 2 times are preserved."""
+        comment = "<!-- twice -->"
+        md = f"A\n{comment}\nB\n{comment}\nC"
+        result = strip_html_comment_watermarks(md)
+        assert result.count(comment) == 2
+
+
+# ---------------------------------------------------------------------------
 # summarize_chart (mocked VLM API)
 # ---------------------------------------------------------------------------
 
@@ -208,6 +312,43 @@ class TestSummarizeChart:
         assert payload["model"] == "test/vlm-model"
         user_msg = payload["messages"][1]
         assert user_msg["content"][0]["type"] == "image_url"
+        # No page_text provided → only image block
+        assert len(user_msg["content"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_summarize_chart_with_page_text(self, tmp_path: Path):
+        """When page_text is provided, it is sent alongside the image."""
+        settings = _make_settings(tmp_path)
+        image_bytes = b"fake-png-bytes"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "Revenue chart summary."}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("doc_parser.chart_enhance.httpx.AsyncClient") as MockClient:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.post.return_value = mock_response
+            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client_instance
+
+            result = await summarize_chart(
+                image_bytes, settings, page_text="Q1 revenue was $10M"
+            )
+
+        assert result == "Revenue chart summary."
+
+        call_kwargs = mock_client_instance.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+        user_msg = payload["messages"][1]
+        assert len(user_msg["content"]) == 2
+        assert user_msg["content"][0]["type"] == "image_url"
+        assert user_msg["content"][1]["type"] == "text"
+        assert "Q1 revenue was $10M" in user_msg["content"][1]["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -393,3 +534,67 @@ class TestEnhanceCharts:
         assert "[Chart Summary] Summary for chart 2." in enhanced
         assert chart1 not in enhanced
         assert chart2 not in enhanced
+
+    @pytest.mark.asyncio
+    async def test_full_flow_strips_watermarks(self, tmp_path: Path):
+        """Full flow strips repeated HTML comment watermarks from output."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        settings = _make_settings(tmp_path)
+
+        wm = "<!-- macroamy watermark -->"
+        chart_html = '<table border="1"><tr><td>Fake</td></tr></table>'
+        markdown = (
+            f"# Report\n{wm}\nIntro\n{wm}\n\n{chart_html}\n\n{wm}\nEnd"
+        )
+
+        detail = [
+            {"type": "text", "text": "Intro", "page_number": 1},
+            {
+                "type": "image",
+                "sub_type": "chart",
+                "text": chart_html,
+                "page_number": 1,
+                "position": {"x": 100, "y": 100, "width": 300, "height": 200},
+            },
+        ]
+
+        with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
+            mock_vlm.return_value = "A chart."
+
+            enhanced, count = await enhance_charts(
+                pdf_path, markdown, detail, settings,
+            )
+
+        assert count == 1
+        assert wm not in enhanced
+        assert "[Chart Summary] A chart." in enhanced
+
+    @pytest.mark.asyncio
+    async def test_page_text_passed_to_vlm(self, tmp_path: Path):
+        """enhance_charts passes page text context to summarize_chart."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        settings = _make_settings(tmp_path)
+
+        chart_html = '<table><tr><td>data</td></tr></table>'
+        markdown = f"# Report\n\n{chart_html}\n\nEnd"
+
+        detail = [
+            {"type": "text", "text": "Revenue discussion", "page_number": 1},
+            {
+                "type": "image",
+                "sub_type": "chart",
+                "text": chart_html,
+                "page_number": 1,
+                "position": {"x": 100, "y": 100, "width": 200, "height": 100},
+            },
+        ]
+
+        with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
+            mock_vlm.return_value = "Chart summary."
+
+            await enhance_charts(pdf_path, markdown, detail, settings)
+
+        # summarize_chart was called with page_text keyword arg
+        call_kwargs = mock_vlm.call_args
+        assert "page_text" in call_kwargs.kwargs
+        assert "Revenue discussion" in call_kwargs.kwargs["page_text"]
