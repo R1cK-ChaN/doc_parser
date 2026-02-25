@@ -166,6 +166,7 @@ async def _do_parse(
                     parse_result.markdown,
                     parse_result.detail,
                     settings,
+                    pages=parse_result.pages,
                 )
                 if chart_count > 0:
                     enh_path = store_enhanced_markdown(

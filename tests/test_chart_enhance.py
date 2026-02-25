@@ -92,6 +92,31 @@ class TestExtractChartImage:
         assert isinstance(result, bytes)
         assert result[:4] == b"\x89PNG"
 
+    def test_with_flat_list_position(self, tmp_path: Path):
+        """Extract chart image using flat list [x0,y0,x1,y1,...] position format."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        # Flat 8-element list: [x0,y0, x1,y1, x2,y2, x3,y3]
+        position = [100, 100, 400, 100, 400, 300, 100, 300]
+
+        result = extract_chart_image(pdf_path, 0, position)
+
+        assert isinstance(result, bytes)
+        assert result[:4] == b"\x89PNG"
+
+    def test_with_textin_page_size_scaling(self, tmp_path: Path):
+        """Coordinates are scaled when textin_page_size is provided."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf", width=612, height=792)
+        # TextIn coords at 2x scale (1224x1584)
+        position = [200, 200, 800, 200, 800, 600, 200, 600]
+
+        result = extract_chart_image(
+            pdf_path, 0, position,
+            textin_page_size=(1224, 1584),
+        )
+
+        assert isinstance(result, bytes)
+        assert result[:4] == b"\x89PNG"
+
     def test_fallback_full_page(self, tmp_path: Path):
         """Unknown position format falls back to full page."""
         pdf_path = _create_test_pdf(tmp_path / "test.pdf")
@@ -223,6 +248,37 @@ class TestEnhanceCharts:
         assert "[Chart Summary] Bar chart showing quarterly revenue." in enhanced
         assert "# Report" in enhanced
         assert "Conclusion" in enhanced
+
+    @pytest.mark.asyncio
+    async def test_full_flow_textin_format(self, tmp_path: Path):
+        """Full flow with real TextIn format: flat list position, page_id, pages."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf", width=612, height=792)
+        settings = _make_settings(tmp_path)
+
+        chart_html = '<table border="1"><tr><td>Q1</td><td>100</td></tr></table>'
+        markdown = f"# Report\n\n{chart_html}\n\nEnd"
+
+        detail = [
+            {
+                "type": "image",
+                "sub_type": "chart",
+                "text": chart_html,
+                "page_id": 1,
+                "position": [200, 200, 800, 200, 800, 600, 200, 600],
+            },
+        ]
+        pages = [{"page_id": 1, "width": 1224, "height": 1584}]
+
+        with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
+            mock_vlm.return_value = "Line chart of quarterly results."
+
+            enhanced, count = await enhance_charts(
+                pdf_path, markdown, detail, settings, pages=pages,
+            )
+
+        assert count == 1
+        assert chart_html not in enhanced
+        assert "[Chart Summary] Line chart of quarterly results." in enhanced
 
     @pytest.mark.asyncio
     async def test_no_chart_elements(self, tmp_path: Path):

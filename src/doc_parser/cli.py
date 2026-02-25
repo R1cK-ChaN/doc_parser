@@ -263,6 +263,13 @@ def enhance_charts_cmd(doc_file_id: int) -> None:
             detail_full = settings.parsed_path / doc_parse.detail_json_path
             detail = json.loads(detail_full.read_text(encoding="utf-8"))
 
+            # Load pages JSON for coordinate scaling
+            pages = []
+            if doc_parse.pages_json_path:
+                pages_full = settings.parsed_path / doc_parse.pages_json_path
+                if pages_full.exists():
+                    pages = json.loads(pages_full.read_text(encoding="utf-8"))
+
             # Resolve PDF path
             file_path = doc_file.local_path
             if not file_path:
@@ -270,7 +277,7 @@ def enhance_charts_cmd(doc_file_id: int) -> None:
                 return
 
             enhanced_md, chart_count = await enhance_charts(
-                file_path, markdown, detail, settings,
+                file_path, markdown, detail, settings, pages=pages,
             )
 
             if chart_count == 0:

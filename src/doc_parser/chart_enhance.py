@@ -34,8 +34,9 @@ specific numbers unless they are clearly visible in the chart.\
 def extract_chart_image(
     pdf_path: str | Path,
     page_index: int,
-    position: dict[str, Any],
+    position: list | dict,
     *,
+    textin_page_size: tuple[float, float] | None = None,
     scale: float = 2.0,
 ) -> bytes:
     """Crop a chart region from a PDF page and return PNG bytes.
@@ -43,9 +44,10 @@ def extract_chart_image(
     Args:
         pdf_path: Path to the PDF file.
         page_index: 0-based page index.
-        position: Bounding box dict with keys from TextIn detail elements.
-            Expected keys vary; we support both "x", "y", "width", "height"
-            and quad-point formats.
+        position: Bounding box from TextIn detail elements.
+            Flat list [x0,y0, x1,y1, x2,y2, x3,y3] or dict with quad/points/x,y keys.
+        textin_page_size: (width, height) from TextIn pages JSON, used to scale
+            coordinates to PyMuPDF space. None = no scaling.
         scale: Render scale factor (2.0 = 144 DPI for a 72-DPI page).
 
     Returns:
@@ -58,6 +60,15 @@ def extract_chart_image(
         # Build the clip rectangle from position data
         clip = _position_to_rect(position, page)
 
+        # Scale from TextIn coordinate space to PyMuPDF space if needed
+        if textin_page_size:
+            sx = page.rect.width / textin_page_size[0]
+            sy = page.rect.height / textin_page_size[1]
+            clip = pymupdf.Rect(
+                clip.x0 * sx, clip.y0 * sy,
+                clip.x1 * sx, clip.y1 * sy,
+            )
+
         # Render the clipped region
         mat = pymupdf.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, clip=clip)
@@ -67,14 +78,29 @@ def extract_chart_image(
 
 
 def _position_to_rect(
-    position: dict[str, Any],
+    position: list | dict,
     page: pymupdf.Page,
 ) -> pymupdf.Rect:
-    """Convert a TextIn position dict to a PyMuPDF Rect.
+    """Convert a TextIn position to a PyMuPDF Rect.
 
-    TextIn detail elements use quad-point arrays or simple x/y/width/height.
-    The coordinates are in the document's native coordinate space.
+    TextIn detail elements use either:
+    - Flat list: [x0, y0, x1, y1, x2, y2, x3, y3] (4 quad points)
+    - Dict with "quad", "points", or "x"/"y"/"width"/"height" keys
     """
+    # Flat list of 8 numbers: [x0,y0, x1,y1, x2,y2, x3,y3]
+    if isinstance(position, list):
+        if len(position) == 8:
+            xs = [position[i] for i in (0, 2, 4, 6)]
+            ys = [position[i] for i in (1, 3, 5, 7)]
+            return pymupdf.Rect(min(xs), min(ys), max(xs), max(ys))
+        elif len(position) == 4:
+            # [x0, y0, x1, y1]
+            return pymupdf.Rect(position[0], position[1], position[2], position[3])
+        else:
+            logger.warning("Unexpected position list length %d, using full page", len(position))
+            return page.rect
+
+    # Dict formats below
     # Quad-point format: [[x0,y0], [x1,y1], [x2,y2], [x3,y3]]
     if "quad" in position:
         pts = position["quad"]
@@ -171,6 +197,7 @@ async def enhance_charts(
     markdown: str,
     detail: list[dict[str, Any]],
     settings: Settings,
+    pages: list[dict[str, Any]] | None = None,
 ) -> tuple[str, int]:
     """Orchestrate chart enhancement: find charts, crop, summarize, replace.
 
@@ -179,6 +206,7 @@ async def enhance_charts(
         markdown: The original markdown from TextIn.
         detail: The detail elements list from the parse result.
         settings: Application settings (must have vlm_model set).
+        pages: TextIn pages list (with width/height per page) for coordinate scaling.
 
     Returns:
         Tuple of (enhanced_markdown, chart_count).
@@ -192,35 +220,48 @@ async def enhance_charts(
     if not chart_elements:
         return markdown, 0
 
+    # Build page size lookup: page_id (1-based) -> (width, height)
+    page_sizes: dict[int, tuple[float, float]] = {}
+    if pages:
+        for p in pages:
+            pid = p.get("page_id", 0)
+            if pid and "width" in p and "height" in p:
+                page_sizes[pid] = (p["width"], p["height"])
+
     enhanced = markdown
     chart_count = 0
 
     for el in chart_elements:
         text = el.get("text", "")
         position = el.get("position")
-        page_number = el.get("page_number", 1)
+        # TextIn uses page_id (1-based); fall back to page_number
+        page_id = el.get("page_id") or el.get("page_number", 1)
 
-        if not text or not position:
+        if not text or position is None:
             logger.warning("Chart element missing text or position, skipping")
             continue
 
-        # page_number is 1-based in TextIn, PyMuPDF uses 0-based
-        page_index = page_number - 1
+        # page_id is 1-based in TextIn, PyMuPDF uses 0-based
+        page_index = page_id - 1
+        textin_page_size = page_sizes.get(page_id)
 
         try:
-            image_bytes = extract_chart_image(pdf_path, page_index, position)
+            image_bytes = extract_chart_image(
+                pdf_path, page_index, position,
+                textin_page_size=textin_page_size,
+            )
             summary = await summarize_chart(image_bytes, settings)
             enhanced = replace_chart_table(enhanced, text, summary)
             chart_count += 1
             logger.info(
                 "Enhanced chart on page %d: %s",
-                page_number,
+                page_id,
                 summary[:80] + "..." if len(summary) > 80 else summary,
             )
         except Exception as exc:
             logger.warning(
                 "Failed to enhance chart on page %d: %s",
-                page_number,
+                page_id,
                 exc,
             )
 
