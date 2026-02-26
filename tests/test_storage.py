@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from doc_parser.storage import store_extraction_result, store_parse_result
+from doc_parser.storage import store_enhanced_markdown, store_extraction_result, store_parse_result
 from doc_parser.textin_client import ParseResult
 
 
@@ -110,3 +110,21 @@ def test_store_extraction_result_directory_layout(tmp_path: Path):
     store_extraction_result(tmp_path, sha, 3, {"test": True})
     expected_dir = tmp_path / sha[:4] / sha / "3"
     assert expected_dir.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# store_enhanced_markdown
+# ---------------------------------------------------------------------------
+
+def test_store_enhanced_markdown_strips_watermarks(tmp_path: Path):
+    """Enhanced markdown on disk has watermarks removed."""
+    sha = "a" * 64
+    content = "# Title\n<!-- mroamy-手整，10 加 -->\nReal content\n私营部roamy整理"
+    rel = store_enhanced_markdown(tmp_path, sha, 5, content)
+    full = tmp_path / rel
+    stored = full.read_text(encoding="utf-8")
+    assert "mroamy" not in stored
+    assert "roamy" not in stored
+    assert "# Title" in stored
+    assert "Real content" in stored
+    assert "私营部" in stored

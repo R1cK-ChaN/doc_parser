@@ -65,7 +65,7 @@ def store_enhanced_markdown(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     md_path = out_dir / "output_enhanced.md"
-    md_path.write_text(content, encoding="utf-8")
+    md_path.write_text(strip_watermark_lines(content), encoding="utf-8")
 
     return str(rel_root / "output_enhanced.md")
 
