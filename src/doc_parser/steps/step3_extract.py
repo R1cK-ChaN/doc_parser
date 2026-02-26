@@ -112,11 +112,14 @@ async def _do_extraction(
 
         # Load markdown for LLM provider
         markdown = None
-        if settings.extraction_provider == "llm" and latest_parse and latest_parse.markdown_path:
-            md_file = settings.parsed_path / latest_parse.markdown_path
-            if md_file.exists():
-                markdown = md_file.read_text(encoding="utf-8")
-                markdown = strip_watermark_lines(markdown)
+        if settings.extraction_provider == "llm" and latest_parse:
+            # Prefer enhanced markdown (VLM chart summaries) over raw parse output
+            md_rel = latest_parse.enhanced_markdown_path or latest_parse.markdown_path
+            if md_rel:
+                md_file = settings.parsed_path / md_rel
+                if md_file.exists():
+                    markdown = md_file.read_text(encoding="utf-8")
+                    markdown = strip_watermark_lines(markdown)
 
         # Create DocExtraction row
         extraction = DocExtraction(
