@@ -217,7 +217,7 @@ class TextInClient:
 
         # Check if any chart elements exist
         has_chart = any(
-            el.get("type") == "image" and el.get("image_type") == "chart"
+            el.get("type") == "image" and el.get("sub_type") == "chart"
             for el in detail
         )
 

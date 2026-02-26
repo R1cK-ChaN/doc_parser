@@ -143,16 +143,28 @@ def test_parse_response_full():
 
 
 def test_parse_response_chart_detection():
-    """has_chart is True when a chart image element exists."""
+    """has_chart is True when a chart image element exists with sub_type."""
     client = _make_client()
     data = {
         "detail": [
-            {"type": "image", "image_type": "chart"},
+            {"type": "image", "sub_type": "chart"},
             {"type": "text", "text": "caption"},
         ],
     }
     result = client._parse_response(data, {})
     assert result.has_chart is True
+
+
+def test_parse_response_chart_detection_image_type_ignored():
+    """has_chart is False when only image_type (not sub_type) is set."""
+    client = _make_client()
+    data = {
+        "detail": [
+            {"type": "image", "image_type": "chart"},
+        ],
+    }
+    result = client._parse_response(data, {})
+    assert result.has_chart is False
 
 
 def test_parse_response_missing_fields():

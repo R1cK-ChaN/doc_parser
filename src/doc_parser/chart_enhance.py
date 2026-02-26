@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,7 @@ import httpx
 import pymupdf
 
 from doc_parser.config import Settings
+from doc_parser.watermark import strip_watermarks
 
 logger = logging.getLogger(__name__)
 
@@ -223,28 +223,6 @@ def replace_chart_table(
     return markdown.replace(hallucinated_html, replacement, 1)
 
 
-def strip_html_comment_watermarks(markdown: str) -> str:
-    """Remove HTML comments that appear 3+ times (repeated watermarks).
-
-    Single-occurrence comments are preserved as they may be meaningful.
-    """
-    comments = re.findall(r"<!--.*?-->", markdown, re.DOTALL)
-    if not comments:
-        return markdown
-
-    counts = Counter(comments)
-    for comment, count in counts.items():
-        if count >= 3:
-            # Remove the comment and any surrounding blank lines it creates
-            pattern = re.compile(
-                r"\n*" + re.escape(comment) + r"\n*",
-                re.DOTALL,
-            )
-            markdown = pattern.sub("\n", markdown)
-
-    return markdown.strip("\n") + "\n" if markdown.strip() else markdown
-
-
 async def enhance_charts(
     pdf_path: str | Path,
     markdown: str,
@@ -319,5 +297,5 @@ async def enhance_charts(
                 exc,
             )
 
-    enhanced = strip_html_comment_watermarks(enhanced)
+    enhanced = strip_watermarks(enhanced)
     return enhanced, chart_count

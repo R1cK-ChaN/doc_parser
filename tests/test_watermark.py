@@ -224,6 +224,53 @@ class TestSafetyGuards:
 
 
 # ---------------------------------------------------------------------------
+# Repeated HTML comment removal (Layer 4)
+# ---------------------------------------------------------------------------
+
+class TestRepeatedHTMLComments:
+    def test_strips_comments_appearing_3_plus_times(self):
+        """23× <!-- GMF Research --> should be stripped."""
+        comment = "<!-- GMF Research -->"
+        lines = ["# Title"] + [comment] * 23 + ["Real content"]
+        md = "\n".join(lines)
+        result = strip_watermarks(md)
+        assert "GMF Research" not in result
+        assert "# Title" in result
+        assert "Real content" in result
+
+    def test_preserves_comments_below_threshold(self):
+        """2× <!-- something --> should be preserved (below 3)."""
+        md = "# Title\n<!-- note -->\nMiddle\n<!-- note -->\nEnd"
+        result = strip_watermarks(md)
+        assert "<!-- note -->" in result
+        assert result.count("<!-- note -->") == 2
+
+    def test_preserves_single_meaningful_comment(self):
+        """A single unique comment is preserved."""
+        md = "# Title\n<!-- TODO: review this section -->\nContent"
+        result = strip_watermarks(md)
+        assert "<!-- TODO: review this section -->" in result
+
+    def test_mixed_strips_only_repeated(self):
+        """Only comments at 3+ count are stripped; others remain."""
+        watermark = "<!-- GMF Research -->"
+        keeper = "<!-- important note -->"
+        lines = (
+            ["# Title"]
+            + [watermark] * 5
+            + [keeper, "Middle"]
+            + [watermark] * 3
+            + ["End"]
+        )
+        md = "\n".join(lines)
+        result = strip_watermarks(md)
+        assert "GMF Research" not in result
+        assert "<!-- important note -->" in result
+        assert "# Title" in result
+        assert "End" in result
+
+
+# ---------------------------------------------------------------------------
 # Backward compatibility
 # ---------------------------------------------------------------------------
 
