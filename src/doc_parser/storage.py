@@ -1,90 +1,80 @@
-"""Save parsed outputs to the local filesystem."""
+"""Single-file JSON result storage."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from doc_parser.textin_client import ParseResult, decode_excel
-from doc_parser.watermark import strip_watermark_lines
+
+def result_path(extraction_path: Path, sha: str) -> Path:
+    """Return the path for a result JSON: <extraction_path>/<sha[:4]>/<sha>.json."""
+    return extraction_path / sha[:4] / f"{sha}.json"
 
 
-def store_parse_result(
-    base_dir: Path,
-    sha256: str,
-    parse_id: int,
-    result: ParseResult,
-) -> dict[str, str]:
-    """Write parse outputs to disk and return relative paths.
+def save_result(extraction_path: Path, result: dict) -> Path:
+    """Write a result dict as JSON and return the path."""
+    sha = result["sha256"]
+    path = result_path(extraction_path, sha)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
-    Layout: <base_dir>/<sha256[:4]>/<sha256>/<parse_id>/
-        output.md, detail.json, pages.json, tables.xlsx
+
+def load_result(extraction_path: Path, sha: str) -> dict | None:
+    """Read a result JSON, or return None if it doesn't exist."""
+    path = result_path(extraction_path, sha)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def has_result(extraction_path: Path, sha: str) -> bool:
+    """Check whether a result JSON exists."""
+    return result_path(extraction_path, sha).exists()
+
+
+def list_results(extraction_path: Path) -> list[dict]:
+    """Scan all result JSONs and return them as dicts."""
+    results: list[dict] = []
+    if not extraction_path.exists():
+        return results
+    for json_file in sorted(extraction_path.glob("*/*.json")):
+        try:
+            data = json.loads(json_file.read_text(encoding="utf-8"))
+            results.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return results
+
+
+def resolve_sha_prefix(extraction_path: Path, prefix: str) -> str:
+    """Resolve a short SHA prefix to a full SHA (like git short refs).
+
+    Raises ValueError if zero or multiple matches.
     """
-    rel_root = Path(sha256[:4]) / sha256 / str(parse_id)
-    out_dir = base_dir / rel_root
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not extraction_path.exists():
+        raise ValueError(f"No results found for prefix '{prefix}'")
 
-    paths: dict[str, str] = {}
+    matches: list[str] = []
+    # The bucket directory is sha[:4], so if prefix is >= 4 chars we only check one bucket
+    bucket = prefix[:4]
+    bucket_dir = extraction_path / bucket
+    if bucket_dir.is_dir():
+        for json_file in bucket_dir.glob("*.json"):
+            sha = json_file.stem
+            if sha.startswith(prefix):
+                matches.append(sha)
+    else:
+        # prefix < 4 chars: scan all bucket dirs that start with prefix
+        for d in sorted(extraction_path.iterdir()):
+            if d.is_dir() and d.name.startswith(prefix):
+                for json_file in d.glob("*.json"):
+                    sha = json_file.stem
+                    if sha.startswith(prefix):
+                        matches.append(sha)
 
-    # Markdown (strip watermark lines before persisting)
-    md_path = out_dir / "output.md"
-    md_path.write_text(strip_watermark_lines(result.markdown), encoding="utf-8")
-    paths["markdown_path"] = str(rel_root / "output.md")
-
-    # Detail JSON
-    detail_path = out_dir / "detail.json"
-    detail_path.write_text(json.dumps(result.detail, ensure_ascii=False, indent=2), encoding="utf-8")
-    paths["detail_json_path"] = str(rel_root / "detail.json")
-
-    # Pages JSON
-    pages_path = out_dir / "pages.json"
-    pages_path.write_text(json.dumps(result.pages, ensure_ascii=False, indent=2), encoding="utf-8")
-    paths["pages_json_path"] = str(rel_root / "pages.json")
-
-    # Excel (optional)
-    if result.excel_base64:
-        xlsx_path = out_dir / "tables.xlsx"
-        xlsx_path.write_bytes(decode_excel(result.excel_base64))
-        paths["excel_path"] = str(rel_root / "tables.xlsx")
-
-    return paths
-
-
-def store_enhanced_markdown(
-    base_dir: Path,
-    sha256: str,
-    parse_id: int,
-    content: str,
-) -> str:
-    """Write enhanced markdown to disk and return relative path.
-
-    Layout: <base_dir>/<sha256[:4]>/<sha256>/<parse_id>/output_enhanced.md
-    """
-    rel_root = Path(sha256[:4]) / sha256 / str(parse_id)
-    out_dir = base_dir / rel_root
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    md_path = out_dir / "output_enhanced.md"
-    md_path.write_text(strip_watermark_lines(content), encoding="utf-8")
-
-    return str(rel_root / "output_enhanced.md")
-
-
-def store_extraction_result(
-    base_dir: Path,
-    sha256: str,
-    extraction_id: int,
-    response_data: dict,
-) -> str:
-    """Write full extraction API response to disk and return relative path.
-
-    Layout: <base_dir>/<sha256[:4]>/<sha256>/<extraction_id>/extraction.json
-    """
-    rel_root = Path(sha256[:4]) / sha256 / str(extraction_id)
-    out_dir = base_dir / rel_root
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    json_path = out_dir / "extraction.json"
-    json_path.write_text(json.dumps(response_data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    return str(rel_root / "extraction.json")
+    if len(matches) == 0:
+        raise ValueError(f"No results found for prefix '{prefix}'")
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous prefix '{prefix}' matches {len(matches)} results")
+    return matches[0]

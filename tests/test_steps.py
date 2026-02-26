@@ -1,4 +1,4 @@
-"""Tests for doc_parser.steps — decoupled 2-step pipeline functions."""
+"""Tests for doc_parser.steps — pure API call wrappers."""
 
 from __future__ import annotations
 
@@ -6,55 +6,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from doc_parser.config import Settings
-from doc_parser.models import (
-    DocExtraction,
-    DocFile,
-    DocParse,
-    epoch_now,
-)
 from doc_parser.steps.step2_parse import run_parse
-from doc_parser.extraction import TextInExtractionProvider
-from doc_parser.steps.step3_extract import run_extraction, parse_date_to_epoch
-from doc_parser.textin_client import (
-    ExtractionResult,
-    ParseResult,
-    TextInAPIError,
-)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_settings(tmp_path: Path) -> Settings:
-    s = Settings(
-        textin_app_id="test-app",
-        textin_secret_code="test-secret",
-        database_url="sqlite+aiosqlite://",
-        data_dir=tmp_path / "data",
-    )
-    s.ensure_dirs()
-    return s
-
-
-async def _create_doc_file(async_engine, file_name: str = "test.pdf", local_path: str = "/tmp/test.pdf") -> int:
-    """Create a DocFile row and return its ID."""
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        df = DocFile(
-            file_id=f"local:{file_name}",
-            sha256="a" * 64,
-            source="local",
-            file_name=file_name,
-            local_path=local_path,
-        )
-        session.add(df)
-        await session.commit()
-        return df.id
+from doc_parser.steps.step3_extract import parse_date_to_epoch, run_extraction
+from doc_parser.textin_client import ExtractionResult, ParseResult, TextInAPIError
 
 
 # ---------------------------------------------------------------------------
@@ -69,38 +24,32 @@ def test_parse_date_to_epoch_valid():
 
 
 def test_parse_date_to_epoch_none():
-    """None input returns None."""
     assert parse_date_to_epoch(None) is None
 
 
 def test_parse_date_to_epoch_empty():
-    """Empty string returns None."""
     assert parse_date_to_epoch("") is None
 
 
 def test_parse_date_to_epoch_invalid():
-    """Invalid date string returns None."""
     assert parse_date_to_epoch("not-a-date") is None
 
 
 def test_parse_date_to_epoch_various_formats():
-    """Various date formats are handled."""
     assert parse_date_to_epoch("January 15, 2024") is not None
     assert parse_date_to_epoch("2024/01/15") is not None
     assert parse_date_to_epoch("15 Jan 2024") is not None
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Parse
+# run_parse
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_step2_parse_success(tmp_path: Path, async_engine, mock_get_session):
-    """Parse creates DocParse + DocElement rows and writes files."""
-    settings = _make_settings(tmp_path)
+async def test_run_parse_returns_parse_result(tmp_path: Path, test_settings):
+    """run_parse returns a ParseResult from TextIn (no file writes)."""
     pdf = tmp_path / "test.pdf"
     pdf.write_bytes(b"%PDF test content")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
 
     mock_result = ParseResult(
         markdown="# Parsed",
@@ -110,213 +59,144 @@ async def test_step2_parse_success(tmp_path: Path, async_engine, mock_get_sessio
         valid_page_number=1,
         duration_ms=200,
         request_id="px-1",
-        src_page_count=3,
     )
 
     with patch("doc_parser.steps.step2_parse.TextInClient") as MockTextIn:
         mock_instance = MagicMock()
         mock_instance.parse_file_x = AsyncMock(return_value=mock_result)
-        mock_instance.get_parsex_config.return_value = {"pdf_parse_mode": "auto"}
         mock_instance.close = AsyncMock()
         MockTextIn.return_value = mock_instance
 
-        result = await run_parse(settings, doc_file_id)
-        assert result is not None
+        result = await run_parse(test_settings, pdf)
 
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        dp = (await session.execute(select(DocParse))).scalar_one()
-        assert dp.status == "completed"
-        assert dp.src_page_count == 3
-        assert dp.markdown_path is not None
+    assert isinstance(result, ParseResult)
+    assert result.markdown == "# Parsed"
+    assert result.total_page_number == 1
+    assert result.duration_ms == 200
 
 
 @pytest.mark.asyncio
-async def test_step2_parse_skip_existing(tmp_path: Path, async_engine, mock_get_session):
-    """Parse is skipped if already completed."""
-    settings = _make_settings(tmp_path)
+async def test_run_parse_no_file_writes(tmp_path: Path, test_settings):
+    """run_parse does not write any files to disk."""
     pdf = tmp_path / "test.pdf"
     pdf.write_bytes(b"%PDF test")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
+    test_settings.ensure_dirs()
 
-    # Create a completed parse row
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        dp = DocParse(doc_file_id=doc_file_id, status="completed")
-        session.add(dp)
-        await session.commit()
+    mock_result = ParseResult(markdown="# Test", detail=[], pages=[])
 
     with patch("doc_parser.steps.step2_parse.TextInClient") as MockTextIn:
         mock_instance = MagicMock()
+        mock_instance.parse_file_x = AsyncMock(return_value=mock_result)
         mock_instance.close = AsyncMock()
         MockTextIn.return_value = mock_instance
 
-        result = await run_parse(settings, doc_file_id)
-        assert result is None
+        await run_parse(test_settings, pdf)
+
+    # No files should be written in parsed_path
+    parsed_files = list(test_settings.parsed_path.rglob("*"))
+    assert len(parsed_files) == 0
 
 
 @pytest.mark.asyncio
-async def test_step2_parse_failure(tmp_path: Path, async_engine, mock_get_session):
-    """Parse failure sets status=failed."""
-    settings = _make_settings(tmp_path)
+async def test_run_parse_propagates_error(tmp_path: Path, test_settings):
+    """run_parse propagates TextIn API errors."""
     pdf = tmp_path / "test.pdf"
     pdf.write_bytes(b"%PDF test")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
 
     with patch("doc_parser.steps.step2_parse.TextInClient") as MockTextIn:
         mock_instance = MagicMock()
         mock_instance.parse_file_x = AsyncMock(
             side_effect=TextInAPIError(500, "Parse error")
         )
-        mock_instance.get_parsex_config.return_value = {"pdf_parse_mode": "auto"}
         mock_instance.close = AsyncMock()
         MockTextIn.return_value = mock_instance
 
-        result = await run_parse(settings, doc_file_id)
-        assert result is None
+        with pytest.raises(TextInAPIError, match="Parse error"):
+            await run_parse(test_settings, pdf)
 
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        dp = (await session.execute(select(DocParse))).scalar_one()
-        assert dp.status == "failed"
-        assert "Parse error" in dp.error_message
+
+@pytest.mark.asyncio
+async def test_run_parse_closes_client(tmp_path: Path, test_settings):
+    """run_parse always closes the TextIn client."""
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF test")
+
+    with patch("doc_parser.steps.step2_parse.TextInClient") as MockTextIn:
+        mock_instance = MagicMock()
+        mock_instance.parse_file_x = AsyncMock(
+            side_effect=TextInAPIError(500, "fail")
+        )
+        mock_instance.close = AsyncMock()
+        MockTextIn.return_value = mock_instance
+
+        with pytest.raises(TextInAPIError):
+            await run_parse(test_settings, pdf)
+
+        mock_instance.close.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Extraction
+# run_extraction
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_step3_extract_success(tmp_path: Path, async_engine, mock_get_session):
-    """Extraction creates DocExtraction row, writes JSON, and backfills DocFile."""
-    settings = _make_settings(tmp_path)
+async def test_run_extraction_returns_result(tmp_path: Path, test_settings):
+    """run_extraction returns an ExtractionResult (no file writes)."""
     pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF test content")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
+    pdf.write_bytes(b"%PDF test")
 
     mock_result = ExtractionResult(
-        fields={
-            "title": "Q4 Market Report",
-            "broker": "Goldman Sachs",
-            "authors": "John Doe",
-            "publish_date": "2024-01-15",
-            "market": "US",
-            "sector": "Technology",
-            "document_type": "Research Report",
-            "target_company": "Apple Inc",
-            "ticker_symbol": "AAPL",
-        },
-        page_count=10,
+        fields={"title": "Q4 Report", "broker": "GS"},
         duration_ms=500,
         request_id="ext-1",
     )
 
-    mock_provider = MagicMock()
-    mock_provider.extract = AsyncMock(return_value=mock_result)
-    mock_provider.close = AsyncMock()
+    with patch("doc_parser.steps.step3_extract.create_extraction_provider") as mock_create:
+        mock_provider = MagicMock()
+        mock_provider.extract = AsyncMock(return_value=mock_result)
+        mock_provider.close = AsyncMock()
+        mock_create.return_value = mock_provider
 
-    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
-        result = await run_extraction(settings, doc_file_id)
-        assert result is not None
+        result = await run_extraction(test_settings, file_path=pdf)
 
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        ext = (await session.execute(select(DocExtraction))).scalar_one()
-        assert ext.status == "completed"
-        assert ext.title == "Q4 Market Report"
-        assert ext.broker == "Goldman Sachs"
-        assert ext.ticker_symbol == "AAPL"
-        assert ext.publish_date is not None
-        assert ext.extraction_json_path is not None
-        assert ext.provider == "textin"
-
-        # Verify DocFile was backfilled
-        df = (await session.execute(select(DocFile))).scalar_one()
-        assert df.title == "Q4 Market Report"
-        assert df.broker == "Goldman Sachs"
-        assert df.ticker_symbol == "AAPL"
-        assert df.market == "US"
+    assert isinstance(result, ExtractionResult)
+    assert result.fields["title"] == "Q4 Report"
+    assert result.fields["broker"] == "GS"
 
 
 @pytest.mark.asyncio
-async def test_step3_extract_skip_existing(tmp_path: Path, async_engine, mock_get_session):
-    """Extraction is skipped if already completed."""
-    settings = _make_settings(tmp_path)
+async def test_run_extraction_passes_markdown(tmp_path: Path, test_settings):
+    """run_extraction passes markdown to the provider."""
     pdf = tmp_path / "test.pdf"
     pdf.write_bytes(b"%PDF test")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
 
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        ext = DocExtraction(doc_file_id=doc_file_id, status="completed")
-        session.add(ext)
-        await session.commit()
+    mock_result = ExtractionResult(fields={"title": "Report"}, duration_ms=100)
 
-    mock_provider = MagicMock()
-    mock_provider.close = AsyncMock()
+    with patch("doc_parser.steps.step3_extract.create_extraction_provider") as mock_create:
+        mock_provider = MagicMock()
+        mock_provider.extract = AsyncMock(return_value=mock_result)
+        mock_provider.close = AsyncMock()
+        mock_create.return_value = mock_provider
 
-    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
-        result = await run_extraction(settings, doc_file_id)
-        assert result is None
+        await run_extraction(test_settings, file_path=pdf, markdown="# Test markdown")
+
+    call_kwargs = mock_provider.extract.call_args.kwargs
+    assert call_kwargs["markdown"] == "# Test markdown"
 
 
 @pytest.mark.asyncio
-async def test_step3_extract_failure(tmp_path: Path, async_engine, mock_get_session):
-    """Extraction failure sets status=failed."""
-    settings = _make_settings(tmp_path)
+async def test_run_extraction_propagates_error(tmp_path: Path, test_settings):
+    """run_extraction propagates provider errors."""
     pdf = tmp_path / "test.pdf"
     pdf.write_bytes(b"%PDF test")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
 
-    mock_provider = MagicMock()
-    mock_provider.extract = AsyncMock(
-        side_effect=TextInAPIError(500, "Extract error")
-    )
-    mock_provider.close = AsyncMock()
+    with patch("doc_parser.steps.step3_extract.create_extraction_provider") as mock_create:
+        mock_provider = MagicMock()
+        mock_provider.extract = AsyncMock(
+            side_effect=TextInAPIError(500, "Extract error")
+        )
+        mock_provider.close = AsyncMock()
+        mock_create.return_value = mock_provider
 
-    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
-        result = await run_extraction(settings, doc_file_id)
-        assert result is None
-
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        ext = (await session.execute(select(DocExtraction))).scalar_one()
-        assert ext.status == "failed"
-        assert "Extract error" in ext.error_message
-
-
-@pytest.mark.asyncio
-async def test_step3_extract_links_to_parse(tmp_path: Path, async_engine, mock_get_session):
-    """Extraction links to the latest completed parse."""
-    settings = _make_settings(tmp_path)
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF test")
-    doc_file_id = await _create_doc_file(async_engine, local_path=str(pdf))
-
-    # Create a completed parse
-    factory = async_sessionmaker(async_engine, expire_on_commit=False)
-    async with factory() as session:
-        dp = DocParse(doc_file_id=doc_file_id, status="completed")
-        session.add(dp)
-        await session.commit()
-        parse_id = dp.id
-
-    mock_result = ExtractionResult(
-        fields={"title": "Report"},
-        duration_ms=100,
-        request_id="ext-2",
-    )
-
-    mock_provider = MagicMock()
-    mock_provider.extract = AsyncMock(return_value=mock_result)
-    mock_provider.close = AsyncMock()
-
-    with patch("doc_parser.steps.step3_extract.create_extraction_provider", return_value=mock_provider):
-        result = await run_extraction(settings, doc_file_id)
-        assert result is not None
-
-    async with factory() as session:
-        ext = (await session.execute(select(DocExtraction))).scalar_one()
-        assert ext.doc_parse_id == parse_id
-
-
+        with pytest.raises(TextInAPIError, match="Extract error"):
+            await run_extraction(test_settings, file_path=pdf)

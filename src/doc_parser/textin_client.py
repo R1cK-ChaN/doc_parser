@@ -140,9 +140,11 @@ class TextInClient:
         """Convert the TextIn JSON response into a ParseResult."""
         detail = data.get("detail", [])
 
-        # Check if any chart elements exist
+        # Check if any chart elements exist — either explicitly tagged by TextIn
+        # or image elements with substantial OCR text (axis labels, data points)
         has_chart = any(
-            el.get("type") == "image" and el.get("sub_type") == "chart"
+            el.get("type") == "image"
+            and (el.get("sub_type") == "chart" or len(el.get("text", "")) > 50)
             for el in detail
         )
 

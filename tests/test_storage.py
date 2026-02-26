@@ -1,130 +1,167 @@
-"""Tests for doc_parser.storage — filesystem write logic."""
+"""Tests for doc_parser.storage — single-file JSON result storage."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from doc_parser.storage import store_enhanced_markdown, store_extraction_result, store_parse_result
-from doc_parser.textin_client import ParseResult
+import pytest
+
+from doc_parser.storage import (
+    has_result,
+    list_results,
+    load_result,
+    resolve_sha_prefix,
+    result_path,
+    save_result,
+)
+
+
+SHA = "a" * 64
+SHA2 = "b" * 64
+
+
+def _make_result(sha: str = SHA, **overrides) -> dict:
+    base = {
+        "sha256": sha,
+        "file_name": "report.pdf",
+        "source": "local",
+        "title": "Test Report",
+    }
+    base.update(overrides)
+    return base
 
 
 # ---------------------------------------------------------------------------
-# store_parse_result
+# result_path
 # ---------------------------------------------------------------------------
 
-def test_directory_structure(tmp_path: Path, sample_parse_result: ParseResult):
-    """Creates <sha[:4]>/<sha>/<parse_id>/ directory layout."""
-    sha = "abcdef1234567890" * 4  # 64-char hex
-    store_parse_result(tmp_path, sha, 42, sample_parse_result)
-    expected_dir = tmp_path / sha[:4] / sha / "42"
-    assert expected_dir.is_dir()
-
-
-def test_writes_markdown(tmp_path: Path, sample_parse_result: ParseResult):
-    """Writes output.md with the markdown content."""
-    sha = "a" * 64
-    store_parse_result(tmp_path, sha, 1, sample_parse_result)
-    md_path = tmp_path / sha[:4] / sha / "1" / "output.md"
-    assert md_path.exists()
-    assert md_path.read_text(encoding="utf-8") == sample_parse_result.markdown
-
-
-def test_writes_detail_json(tmp_path: Path, sample_parse_result: ParseResult):
-    """Writes detail.json with the detail list."""
-    sha = "b" * 64
-    store_parse_result(tmp_path, sha, 1, sample_parse_result)
-    detail_path = tmp_path / sha[:4] / sha / "1" / "detail.json"
-    assert detail_path.exists()
-    data = json.loads(detail_path.read_text(encoding="utf-8"))
-    assert data == sample_parse_result.detail
-
-
-def test_writes_pages_json(tmp_path: Path, sample_parse_result: ParseResult):
-    """Writes pages.json with the pages list."""
-    sha = "c" * 64
-    store_parse_result(tmp_path, sha, 1, sample_parse_result)
-    pages_path = tmp_path / sha[:4] / sha / "1" / "pages.json"
-    assert pages_path.exists()
-    data = json.loads(pages_path.read_text(encoding="utf-8"))
-    assert data == sample_parse_result.pages
-
-
-def test_writes_xlsx_when_excel_present(tmp_path: Path, sample_parse_result: ParseResult):
-    """Writes tables.xlsx when excel_base64 is provided."""
-    sha = "d" * 64
-    paths = store_parse_result(tmp_path, sha, 1, sample_parse_result)
-    xlsx_path = tmp_path / sha[:4] / sha / "1" / "tables.xlsx"
-    assert xlsx_path.exists()
-    assert "excel_path" in paths
-
-
-def test_skips_xlsx_when_no_excel(tmp_path: Path, sample_parse_result_no_excel: ParseResult):
-    """Does not write tables.xlsx when excel_base64 is None."""
-    sha = "e" * 64
-    paths = store_parse_result(tmp_path, sha, 1, sample_parse_result_no_excel)
-    xlsx_path = tmp_path / sha[:4] / sha / "1" / "tables.xlsx"
-    assert not xlsx_path.exists()
-    assert "excel_path" not in paths
-
-
-def test_returns_relative_paths(tmp_path: Path, sample_parse_result: ParseResult):
-    """Returns a dict of relative path strings."""
-    sha = "f" * 64
-    paths = store_parse_result(tmp_path, sha, 7, sample_parse_result)
-    assert paths["markdown_path"] == f"{sha[:4]}/{sha}/7/output.md"
-    assert paths["detail_json_path"] == f"{sha[:4]}/{sha}/7/detail.json"
-    assert paths["pages_json_path"] == f"{sha[:4]}/{sha}/7/pages.json"
-    assert paths["excel_path"] == f"{sha[:4]}/{sha}/7/tables.xlsx"
-
-
-def test_idempotent_overwrite(tmp_path: Path, sample_parse_result: ParseResult):
-    """Calling store twice on the same path overwrites without error."""
-    sha = "0" * 64
-    store_parse_result(tmp_path, sha, 1, sample_parse_result)
-    store_parse_result(tmp_path, sha, 1, sample_parse_result)
-    md_path = tmp_path / sha[:4] / sha / "1" / "output.md"
-    assert md_path.exists()
+def test_result_path(tmp_path: Path):
+    """result_path returns <base>/<sha[:4]>/<sha>.json."""
+    p = result_path(tmp_path, SHA)
+    assert p == tmp_path / SHA[:4] / f"{SHA}.json"
 
 
 # ---------------------------------------------------------------------------
-# store_extraction_result
+# save_result / load_result round-trip
 # ---------------------------------------------------------------------------
 
-def test_store_extraction_result(tmp_path: Path):
-    """Writes extraction.json and returns relative path."""
-    sha = "c" * 64
-    response_data = {"fields": {"title": "Report"}, "duration_ms": 100}
-    rel_path = store_extraction_result(tmp_path, sha, 7, response_data)
+def test_save_and_load_round_trip(tmp_path: Path):
+    """save_result writes JSON; load_result reads it back identically."""
+    r = _make_result()
+    path = save_result(tmp_path, r)
+    assert path.exists()
 
-    assert rel_path == f"{sha[:4]}/{sha}/7/extraction.json"
-    full_path = tmp_path / rel_path
-    assert full_path.exists()
-    data = json.loads(full_path.read_text(encoding="utf-8"))
-    assert data == response_data
+    loaded = load_result(tmp_path, SHA)
+    assert loaded == r
 
 
-def test_store_extraction_result_directory_layout(tmp_path: Path):
-    """Creates <sha[:4]>/<sha>/<ext_id>/ directory layout."""
-    sha = "d" * 64
-    store_extraction_result(tmp_path, sha, 3, {"test": True})
-    expected_dir = tmp_path / sha[:4] / sha / "3"
-    assert expected_dir.is_dir()
+def test_save_creates_directory(tmp_path: Path):
+    """save_result creates the parent directory."""
+    r = _make_result()
+    path = save_result(tmp_path, r)
+    assert path.parent.is_dir()
+
+
+def test_save_overwrites(tmp_path: Path):
+    """Calling save_result twice overwrites without error."""
+    r1 = _make_result(title="v1")
+    save_result(tmp_path, r1)
+    r2 = _make_result(title="v2")
+    save_result(tmp_path, r2)
+    loaded = load_result(tmp_path, SHA)
+    assert loaded["title"] == "v2"
 
 
 # ---------------------------------------------------------------------------
-# store_enhanced_markdown
+# load_result
 # ---------------------------------------------------------------------------
 
-def test_store_enhanced_markdown_strips_watermarks(tmp_path: Path):
-    """Enhanced markdown on disk has watermarks removed."""
-    sha = "a" * 64
-    content = "# Title\n<!-- mroamy-手整，10 加 -->\nReal content\n私营部roamy整理"
-    rel = store_enhanced_markdown(tmp_path, sha, 5, content)
-    full = tmp_path / rel
-    stored = full.read_text(encoding="utf-8")
-    assert "mroamy" not in stored
-    assert "roamy" not in stored
-    assert "# Title" in stored
-    assert "Real content" in stored
-    assert "私营部" in stored
+def test_load_nonexistent(tmp_path: Path):
+    """load_result returns None for a missing file."""
+    assert load_result(tmp_path, SHA) is None
+
+
+# ---------------------------------------------------------------------------
+# has_result
+# ---------------------------------------------------------------------------
+
+def test_has_result_true(tmp_path: Path):
+    """has_result returns True when the file exists."""
+    save_result(tmp_path, _make_result())
+    assert has_result(tmp_path, SHA) is True
+
+
+def test_has_result_false(tmp_path: Path):
+    """has_result returns False when the file doesn't exist."""
+    assert has_result(tmp_path, SHA) is False
+
+
+# ---------------------------------------------------------------------------
+# list_results
+# ---------------------------------------------------------------------------
+
+def test_list_results_empty(tmp_path: Path):
+    """list_results returns [] for an empty directory."""
+    assert list_results(tmp_path) == []
+
+
+def test_list_results_nonexistent(tmp_path: Path):
+    """list_results returns [] for a nonexistent directory."""
+    assert list_results(tmp_path / "nonexistent") == []
+
+
+def test_list_results_multiple(tmp_path: Path):
+    """list_results returns all saved results."""
+    save_result(tmp_path, _make_result(SHA))
+    save_result(tmp_path, _make_result(SHA2, file_name="other.pdf"))
+    results = list_results(tmp_path)
+    assert len(results) == 2
+    shas = {r["sha256"] for r in results}
+    assert shas == {SHA, SHA2}
+
+
+# ---------------------------------------------------------------------------
+# resolve_sha_prefix
+# ---------------------------------------------------------------------------
+
+def test_resolve_sha_prefix_full(tmp_path: Path):
+    """Full SHA resolves to itself."""
+    save_result(tmp_path, _make_result())
+    assert resolve_sha_prefix(tmp_path, SHA) == SHA
+
+
+def test_resolve_sha_prefix_short(tmp_path: Path):
+    """Short prefix resolves correctly."""
+    save_result(tmp_path, _make_result())
+    assert resolve_sha_prefix(tmp_path, SHA[:8]) == SHA
+
+
+def test_resolve_sha_prefix_very_short(tmp_path: Path):
+    """Prefix < 4 chars resolves if unambiguous."""
+    save_result(tmp_path, _make_result())
+    assert resolve_sha_prefix(tmp_path, SHA[:2]) == SHA
+
+
+def test_resolve_sha_prefix_not_found(tmp_path: Path):
+    """Missing prefix raises ValueError."""
+    save_result(tmp_path, _make_result())
+    with pytest.raises(ValueError, match="No results found"):
+        resolve_sha_prefix(tmp_path, "zzz")
+
+
+def test_resolve_sha_prefix_ambiguous(tmp_path: Path):
+    """Ambiguous prefix raises ValueError."""
+    # Both SHA and SHA2 start with different prefixes, so create two with same prefix
+    sha_a = "abcd" + "0" * 60
+    sha_b = "abcd" + "1" * 60
+    save_result(tmp_path, _make_result(sha_a))
+    save_result(tmp_path, _make_result(sha_b, file_name="other.pdf"))
+    with pytest.raises(ValueError, match="Ambiguous"):
+        resolve_sha_prefix(tmp_path, "abcd")
+
+
+def test_resolve_sha_prefix_empty_dir(tmp_path: Path):
+    """Empty directory raises ValueError."""
+    with pytest.raises(ValueError, match="No results found"):
+        resolve_sha_prefix(tmp_path, "abc")

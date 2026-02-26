@@ -209,18 +209,36 @@ def replace_chart_table(
     hallucinated_html: str,
     summary: str,
 ) -> str:
-    """Replace a hallucinated HTML table in the markdown with a VLM summary.
+    """Replace hallucinated chart content in the markdown with a VLM summary.
+
+    Handles two formats:
+    - HTML table: ``<table>...</table>``
+    - HTML comment + image: ``<!-- ocr_text  -->\\n![](url)``
 
     Args:
         markdown: The full markdown string.
-        hallucinated_html: The <table>...</table> HTML to replace.
+        hallucinated_html: The text to find (table HTML or OCR text).
         summary: The VLM-generated chart description.
 
     Returns:
-        Updated markdown with the table replaced by the summary.
+        Updated markdown with the chart content replaced by the summary.
     """
     replacement = f"[Chart Summary] {summary}"
-    return markdown.replace(hallucinated_html, replacement, 1)
+    text = hallucinated_html.strip()
+
+    # Try replacing <!-- text  -->\n![](url) block using regex.
+    # TextIn uses variable whitespace before "-->", so match flexibly.
+    escaped = re.escape(text)
+    pattern = r"<!--\s*" + escaped + r"\s*-->\n?(?:!\[.*?\]\(.*?\)\n?)?"
+    result = re.sub(pattern, replacement + "\n", markdown, count=1)
+    if result != markdown:
+        return result
+
+    # Direct replacement (HTML tables or other inline content)
+    if text in markdown:
+        return markdown.replace(text, replacement, 1)
+
+    return markdown
 
 
 async def enhance_charts(
@@ -242,10 +260,12 @@ async def enhance_charts(
     Returns:
         Tuple of (enhanced_markdown, chart_count).
     """
-    # Find chart elements
+    # Find chart elements — either explicitly tagged by TextIn (sub_type=chart)
+    # or image elements with substantial OCR text (axis labels, data points)
     chart_elements = [
         el for el in detail
-        if el.get("type") == "image" and el.get("sub_type") == "chart"
+        if el.get("type") == "image"
+        and (el.get("sub_type") == "chart" or len(el.get("text", "")) > 50)
     ]
 
     if not chart_elements:
@@ -297,5 +317,26 @@ async def enhance_charts(
                 exc,
             )
 
+    enhanced = strip_textin_image_urls(enhanced)
     enhanced = strip_watermarks(enhanced)
     return enhanced, chart_count
+
+
+def strip_textin_image_urls(markdown: str) -> str:
+    """Remove TextIn temporary CDN image URLs from markdown.
+
+    These ``![](https://web-api.textin.com/ocr_image/...)`` links are
+    temporary and expire, so they add no value in stored output.
+    Also removes empty HTML comments left behind after chart replacement.
+    """
+    # Remove image links pointing to TextIn CDN (with optional surrounding blank lines)
+    cleaned = re.sub(
+        r"\n?!\[[^\]]*\]\(https://web-api\.textin\.com/[^)]+\)\n?",
+        "\n",
+        markdown,
+    )
+    # Remove empty HTML comments (<!-- -->, <!--  -->, etc.)
+    cleaned = re.sub(r"<!--\s*-->\n?", "", cleaned)
+    # Collapse runs of 3+ blank lines to 2
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned

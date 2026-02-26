@@ -19,9 +19,6 @@ class Settings(BaseSettings):
     textin_app_id: str
     textin_secret_code: str
 
-    # Database
-    database_url: str = "postgresql+psycopg://user:password@localhost:5432/doc_parser"
-
     # Local storage root
     data_dir: Path = Path("data")
 
@@ -33,8 +30,8 @@ class Settings(BaseSettings):
     google_credentials_file: str = "credentials.json"
     google_service_account: bool = False
 
-    # Extraction provider: "textin" or "llm"
-    extraction_provider: str = "textin"
+    # Extraction provider: "llm" or "textin"
+    extraction_provider: str = "llm"
 
     # LLM extraction settings (OpenRouter / OpenAI-compatible)
     llm_api_key: str = ""

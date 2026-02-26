@@ -68,7 +68,6 @@ def test_ensure_dirs_idempotent(tmp_path: Path):
 def test_default_values():
     """Default values are applied when not overridden."""
     s = Settings(textin_app_id="a", textin_secret_code="s")
-    assert s.database_url == "postgresql+psycopg://user:password@localhost:5432/doc_parser"
     assert s.textin_parse_mode == "auto"
     assert s.textin_max_concurrent == 3
     assert s.google_service_account is False

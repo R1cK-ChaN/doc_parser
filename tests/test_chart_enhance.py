@@ -15,9 +15,9 @@ from doc_parser.chart_enhance import (
     enhance_charts,
     extract_chart_image,
     replace_chart_table,
-    strip_html_comment_watermarks,
     summarize_chart,
 )
+from doc_parser.watermark import _strip_repeated_html_comments as strip_html_comment_watermarks
 from doc_parser.config import Settings
 
 

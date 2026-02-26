@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,33 +46,25 @@ def test_help_output(runner: CliRunner):
     assert "doc-parser" in result.output
 
 
-def test_help_shows_new_commands(runner: CliRunner):
-    """Help output includes step commands."""
+def test_help_shows_commands(runner: CliRunner):
+    """Help output includes expected commands."""
     result = runner.invoke(cli, ["--help"])
-    assert "extract" in result.output
-    assert "run-all" in result.output
+    assert "parse-local" in result.output
+    assert "parse-file" in result.output
+    assert "parse-folder" in result.output
+    assert "re-extract" in result.output
+    assert "status" in result.output
+    assert "list-files" in result.output
 
 
-# ---------------------------------------------------------------------------
-# init-db
-# ---------------------------------------------------------------------------
-
-def test_init_db_success(runner: CliRunner):
-    """init-db prints success when alembic succeeds."""
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        result = runner.invoke(cli, ["init-db"])
-        assert result.exit_code == 0
-        assert "successfully" in result.output
-
-
-def test_init_db_failure(runner: CliRunner):
-    """init-db prints error and exits 1 when alembic fails."""
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="migration error")
-        result = runner.invoke(cli, ["init-db"])
-        assert result.exit_code == 1
-        assert "failed" in result.output.lower() or "error" in result.output.lower()
+def test_help_no_removed_commands(runner: CliRunner):
+    """Help output does not include removed commands."""
+    result = runner.invoke(cli, ["--help"])
+    # These commands should be removed
+    assert "init-db" not in result.output
+    assert "run-all" not in result.output
+    assert "extract-folder" not in result.output
+    assert "enhance-charts" not in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -79,22 +72,22 @@ def test_init_db_failure(runner: CliRunner):
 # ---------------------------------------------------------------------------
 
 def test_parse_local_success(runner: CliRunner, tmp_path):
-    """parse-local prints success when a parse ID is returned."""
+    """parse-local prints success when a sha is returned."""
     pdf = tmp_path / "test.pdf"
     pdf.write_bytes(b"%PDF test")
 
+    sha = "a" * 64
+
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.ensure_doc_file", new_callable=AsyncMock, return_value=1),
-        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=42),
-        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=42),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.pipeline.process_local", new_callable=AsyncMock, return_value=sha),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
         result = runner.invoke(cli, ["parse-local", str(pdf)])
         assert result.exit_code == 0
-        assert "42" in result.output
+        assert "Done" in result.output
 
 
 def test_parse_local_skipped(runner: CliRunner, tmp_path):
@@ -103,17 +96,15 @@ def test_parse_local_skipped(runner: CliRunner, tmp_path):
     pdf.write_bytes(b"%PDF test")
 
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.ensure_doc_file", new_callable=AsyncMock, return_value=1),
-        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=None),
-        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=None),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.pipeline.process_local", new_callable=AsyncMock, return_value=None),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
         result = runner.invoke(cli, ["parse-local", str(pdf)])
         assert result.exit_code == 0
-        assert "skipped" in result.output.lower() or "already parsed" in result.output.lower()
+        assert "Skipped" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -121,19 +112,19 @@ def test_parse_local_skipped(runner: CliRunner, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_parse_file_success(runner: CliRunner):
-    """parse-file prints success with the doc_parse ID."""
+    """parse-file prints success."""
+    sha = "b" * 64
+
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.ensure_drive_doc_file", new_callable=AsyncMock, return_value=1),
-        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=99),
-        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=99),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.pipeline.process_drive_file", new_callable=AsyncMock, return_value=sha),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
         result = runner.invoke(cli, ["parse-file", "drive-file-id"])
         assert result.exit_code == 0
-        assert "99" in result.output
+        assert "Done" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -141,91 +132,88 @@ def test_parse_file_success(runner: CliRunner):
 # ---------------------------------------------------------------------------
 
 def test_parse_folder_success(runner: CliRunner):
-    """parse-folder prints parsed/skipped counts."""
+    """parse-folder prints processed/skipped counts."""
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.parse_drive_folder", new_callable=AsyncMock, return_value=[1, 2, None]),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.pipeline.process_drive_folder", new_callable=AsyncMock, return_value=["sha1", "sha2", None]),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
         result = runner.invoke(cli, ["parse-folder", "folder-abc"])
         assert result.exit_code == 0
-        assert "Parsed: 2" in result.output
+        assert "Processed: 2" in result.output
         assert "Skipped: 1" in result.output
 
 
 # ---------------------------------------------------------------------------
-# extract
+# re-extract
 # ---------------------------------------------------------------------------
 
-def test_extract_success(runner: CliRunner):
-    """extract prints success with the doc_extraction ID."""
+def test_re_extract_success(runner: CliRunner, tmp_path):
+    """re-extract prints success with extracted fields."""
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.steps.step3_extract.run_extraction", new_callable=AsyncMock, return_value=10),
-        patch("doc_parser.steps.run_extraction", new_callable=AsyncMock, return_value=10),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.storage.resolve_sha_prefix", return_value="a" * 64),
+        patch("doc_parser.pipeline.re_extract", new_callable=AsyncMock, return_value={
+            "title": "New Title", "broker": "New Broker",
+        }),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
-        result = runner.invoke(cli, ["extract", "1"])
+        result = runner.invoke(cli, ["re-extract", "aaaa"])
         assert result.exit_code == 0
-        assert "10" in result.output
+        assert "Re-extracted" in result.output
 
 
-def test_extract_with_provider_flag(runner: CliRunner):
-    """extract --provider llm sets extraction_provider on settings."""
+def test_re_extract_bad_prefix(runner: CliRunner):
+    """re-extract prints error for unresolvable prefix."""
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.steps.step3_extract.run_extraction", new_callable=AsyncMock, return_value=11),
-        patch("doc_parser.steps.run_extraction", new_callable=AsyncMock, return_value=11),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.storage.resolve_sha_prefix", side_effect=ValueError("No results found for prefix 'zzz'")),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
-        result = runner.invoke(cli, ["extract", "1", "--provider", "llm"])
-        assert result.exit_code == 0
-        assert "11" in result.output
-        mock_settings.__setattr__("extraction_provider", "llm")
+        result = runner.invoke(cli, ["re-extract", "zzz"])
+        assert result.exit_code == 1
+        assert "No results found" in result.output
 
 
 # ---------------------------------------------------------------------------
-# run-all
+# status
 # ---------------------------------------------------------------------------
 
-def test_run_all_success(runner: CliRunner):
-    """run-all shows pipeline results."""
+def test_status_empty(runner: CliRunner):
+    """status shows no results message when directory is empty."""
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch(
-            "doc_parser.pipeline.run_all_steps",
-            new_callable=AsyncMock,
-            return_value={"parse_id": 2, "extraction_id": 3},
-        ),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.storage.list_results", return_value=[]),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
-        result = runner.invoke(cli, ["run-all", "1"])
+        result = runner.invoke(cli, ["status"])
         assert result.exit_code == 0
-        assert "Pipeline Results" in result.output
+        assert "No results" in result.output
 
 
-# ---------------------------------------------------------------------------
-# parse (new step-based)
-# ---------------------------------------------------------------------------
+def test_status_with_results(runner: CliRunner):
+    """status shows counts when results exist."""
+    results = [
+        {"sha256": "a" * 64, "source": "local", "broker": "GS"},
+        {"sha256": "b" * 64, "source": "drive", "broker": "GS"},
+        {"sha256": "c" * 64, "source": "local", "broker": "MS"},
+    ]
 
-def test_parse_step_success(runner: CliRunner):
-    """parse (step 2) prints success with the doc_parse ID."""
     with (
-        patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=7),
-        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=7),
+        patch("doc_parser.cli.get_settings") as mock_gs,
+        patch("doc_parser.storage.list_results", return_value=results),
     ):
         mock_settings = MagicMock()
-        mock_init.return_value = mock_settings
+        mock_gs.return_value = mock_settings
 
-        result = runner.invoke(cli, ["parse", "1"])
+        result = runner.invoke(cli, ["status"])
         assert result.exit_code == 0
-        assert "7" in result.output
+        assert "Results: 3" in result.output
