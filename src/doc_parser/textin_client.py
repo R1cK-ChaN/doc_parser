@@ -76,6 +76,7 @@ class ParseResult:
     duration_ms: int = 0
     request_id: str = ""
     has_chart: bool = False
+    has_table: bool = False
     paragraphs: list[dict[str, Any]] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     src_page_count: int = 0
@@ -148,6 +149,11 @@ class TextInClient:
             for el in detail
         )
 
+        has_table = any(
+            el.get("type") == "table"
+            for el in detail
+        )
+
         return ParseResult(
             markdown=data.get("markdown", ""),
             detail=detail,
@@ -159,6 +165,7 @@ class TextInClient:
             duration_ms=data.get("duration", 0),
             request_id=data.get("request_id", ""),
             has_chart=has_chart,
+            has_table=has_table,
             paragraphs=data.get("paragraphs", []),
             metrics=data.get("metrics", {}),
             src_page_count=data.get("src_page_count", 0),

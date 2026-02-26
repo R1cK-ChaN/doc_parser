@@ -15,7 +15,9 @@ from doc_parser.chart_enhance import (
     enhance_charts,
     extract_chart_image,
     replace_chart_table,
+    replace_table_html,
     summarize_chart,
+    summarize_table,
 )
 from doc_parser.watermark import _strip_repeated_html_comments as strip_html_comment_watermarks
 from doc_parser.config import Settings
@@ -380,11 +382,12 @@ class TestEnhanceCharts:
         with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
             mock_vlm.return_value = "Bar chart showing quarterly revenue."
 
-            enhanced, count = await enhance_charts(
+            enhanced, count, tbl_count = await enhance_charts(
                 pdf_path, markdown, detail, settings,
             )
 
         assert count == 1
+        assert tbl_count == 0
         assert chart_html not in enhanced
         assert "[Chart Summary] Bar chart showing quarterly revenue." in enhanced
         assert "# Report" in enhanced
@@ -413,11 +416,12 @@ class TestEnhanceCharts:
         with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
             mock_vlm.return_value = "Line chart of quarterly results."
 
-            enhanced, count = await enhance_charts(
+            enhanced, count, tbl_count = await enhance_charts(
                 pdf_path, markdown, detail, settings, pages=pages,
             )
 
         assert count == 1
+        assert tbl_count == 0
         assert chart_html not in enhanced
         assert "[Chart Summary] Line chart of quarterly results." in enhanced
 
@@ -430,11 +434,12 @@ class TestEnhanceCharts:
         markdown = "# Report\n\nJust text."
         detail = [{"type": "text", "text": "Report", "page_number": 1}]
 
-        enhanced, count = await enhance_charts(
+        enhanced, count, tbl_count = await enhance_charts(
             pdf_path, markdown, detail, settings,
         )
 
         assert count == 0
+        assert tbl_count == 0
         assert enhanced == markdown
 
     @pytest.mark.asyncio
@@ -458,11 +463,12 @@ class TestEnhanceCharts:
         with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
             mock_vlm.side_effect = Exception("VLM API error")
 
-            enhanced, count = await enhance_charts(
+            enhanced, count, tbl_count = await enhance_charts(
                 pdf_path, markdown, detail, settings,
             )
 
         assert count == 0
+        assert tbl_count == 0
         assert enhanced == markdown  # unchanged on failure
 
     @pytest.mark.asyncio
@@ -490,10 +496,11 @@ class TestEnhanceCharts:
         # Let's just verify no crash with empty model by mocking.
         with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
             mock_vlm.return_value = "summary"
-            enhanced, count = await enhance_charts(
+            enhanced, count, tbl_count = await enhance_charts(
                 pdf_path, markdown, detail, settings,
             )
         assert count == 1
+        assert tbl_count == 0
 
     @pytest.mark.asyncio
     async def test_multiple_charts(self, tmp_path: Path):
@@ -525,11 +532,12 @@ class TestEnhanceCharts:
         with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
             mock_vlm.side_effect = ["Summary for chart 1.", "Summary for chart 2."]
 
-            enhanced, count = await enhance_charts(
+            enhanced, count, tbl_count = await enhance_charts(
                 pdf_path, markdown, detail, settings,
             )
 
         assert count == 2
+        assert tbl_count == 0
         assert "[Chart Summary] Summary for chart 1." in enhanced
         assert "[Chart Summary] Summary for chart 2." in enhanced
         assert chart1 not in enhanced
@@ -561,11 +569,12 @@ class TestEnhanceCharts:
         with patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_vlm:
             mock_vlm.return_value = "A chart."
 
-            enhanced, count = await enhance_charts(
+            enhanced, count, tbl_count = await enhance_charts(
                 pdf_path, markdown, detail, settings,
             )
 
         assert count == 1
+        assert tbl_count == 0
         assert wm not in enhanced
         assert "[Chart Summary] A chart." in enhanced
 
@@ -598,3 +607,257 @@ class TestEnhanceCharts:
         call_kwargs = mock_vlm.call_args
         assert "page_text" in call_kwargs.kwargs
         assert "Revenue discussion" in call_kwargs.kwargs["page_text"]
+
+
+# ---------------------------------------------------------------------------
+# replace_table_html
+# ---------------------------------------------------------------------------
+
+
+class TestReplaceTableHtml:
+    def test_basic_replacement(self):
+        """HTML table is replaced with markdown table."""
+        html = '<table border="1"><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>'
+        markdown = f"Some text\n\n{html}\n\nMore text"
+        md_table = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+
+        result = replace_table_html(markdown, html, md_table)
+
+        assert html not in result
+        assert md_table in result
+        assert "Some text" in result
+        assert "More text" in result
+
+    def test_only_first_occurrence(self):
+        """Only the first occurrence is replaced."""
+        html = "<table><tr><td>data</td></tr></table>"
+        md_table = "| data |\n| --- |"
+        markdown = f"Before\n{html}\nMiddle\n{html}\nAfter"
+
+        result = replace_table_html(markdown, html, md_table)
+
+        assert result.count(md_table) == 1
+        assert result.count(html) == 1
+
+    def test_no_match(self):
+        """If HTML is not found, markdown is unchanged."""
+        markdown = "No table here"
+        html = "<table>missing</table>"
+        md_table = "| missing |\n| --- |"
+
+        result = replace_table_html(markdown, html, md_table)
+
+        assert result == "No table here"
+
+
+# ---------------------------------------------------------------------------
+# summarize_table (mocked VLM API)
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeTable:
+    @pytest.mark.asyncio
+    async def test_summarize_table_success(self, tmp_path: Path):
+        """VLM API returns a markdown table."""
+        settings = _make_settings(tmp_path)
+        image_bytes = b"fake-png-bytes"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "| A | B |\n| --- | --- |\n| 1 | 2 |"}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("doc_parser.chart_enhance.httpx.AsyncClient") as MockClient:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.post.return_value = mock_response
+            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client_instance
+
+            result = await summarize_table(image_bytes, settings)
+
+        assert result == "| A | B |\n| --- | --- |\n| 1 | 2 |"
+        mock_client_instance.post.assert_called_once()
+
+        # Verify the payload uses the table system prompt
+        call_kwargs = mock_client_instance.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+        assert "table reader" in payload["messages"][0]["content"].lower()
+
+    @pytest.mark.asyncio
+    async def test_summarize_table_with_page_text(self, tmp_path: Path):
+        """When page_text is provided, it is sent alongside the image."""
+        settings = _make_settings(tmp_path)
+        image_bytes = b"fake-png-bytes"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "| Col |\n| --- |\n| val |"}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("doc_parser.chart_enhance.httpx.AsyncClient") as MockClient:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.post.return_value = mock_response
+            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client_instance
+
+            result = await summarize_table(
+                image_bytes, settings, page_text="Financial data"
+            )
+
+        assert "Col" in result
+
+        call_kwargs = mock_client_instance.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+        user_msg = payload["messages"][1]
+        assert len(user_msg["content"]) == 2
+        assert "Financial data" in user_msg["content"][1]["text"]
+
+
+# ---------------------------------------------------------------------------
+# enhance_charts with table elements
+# ---------------------------------------------------------------------------
+
+
+class TestEnhanceChartsWithTables:
+    @pytest.mark.asyncio
+    async def test_table_enhancement(self, tmp_path: Path):
+        """Table elements are enhanced with VLM markdown tables."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        settings = _make_settings(tmp_path)
+
+        table_html = '<table border="1"><tr><th>Q1</th><th>Q2</th></tr><tr><td>100</td><td>200</td></tr></table>'
+        markdown = f"# Report\n\n{table_html}\n\nConclusion"
+
+        detail = [
+            {"type": "text", "text": "Report", "page_number": 1},
+            {
+                "type": "table",
+                "text": table_html,
+                "page_number": 1,
+                "position": {"x": 100, "y": 100, "width": 300, "height": 200},
+            },
+        ]
+
+        with patch("doc_parser.chart_enhance.summarize_table", new_callable=AsyncMock) as mock_vlm:
+            mock_vlm.return_value = "| Q1 | Q2 |\n| --- | --- |\n| 100 | 200 |"
+
+            enhanced, chart_count, table_count = await enhance_charts(
+                pdf_path, markdown, detail, settings,
+            )
+
+        assert chart_count == 0
+        assert table_count == 1
+        assert table_html not in enhanced
+        assert "| Q1 | Q2 |" in enhanced
+        assert "# Report" in enhanced
+        assert "Conclusion" in enhanced
+
+    @pytest.mark.asyncio
+    async def test_mixed_charts_and_tables(self, tmp_path: Path):
+        """Both charts and tables are enhanced in the same document."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        settings = _make_settings(tmp_path)
+
+        chart_html = '<table border="1"><tr><td>ChartData</td></tr></table>'
+        table_html = '<table border="1"><tr><th>Col A</th></tr><tr><td>Val</td></tr></table>'
+        markdown = f"# Report\n\n{chart_html}\n\nText\n\n{table_html}\n\nEnd"
+
+        detail = [
+            {
+                "type": "image",
+                "sub_type": "chart",
+                "text": chart_html,
+                "page_number": 1,
+                "position": {"x": 100, "y": 50, "width": 300, "height": 150},
+            },
+            {
+                "type": "table",
+                "text": table_html,
+                "page_number": 1,
+                "position": {"x": 100, "y": 300, "width": 300, "height": 200},
+            },
+        ]
+
+        with (
+            patch("doc_parser.chart_enhance.summarize_chart", new_callable=AsyncMock) as mock_chart,
+            patch("doc_parser.chart_enhance.summarize_table", new_callable=AsyncMock) as mock_table,
+        ):
+            mock_chart.return_value = "A bar chart."
+            mock_table.return_value = "| Col A |\n| --- |\n| Val |"
+
+            enhanced, chart_count, table_count = await enhance_charts(
+                pdf_path, markdown, detail, settings,
+            )
+
+        assert chart_count == 1
+        assert table_count == 1
+        assert chart_html not in enhanced
+        assert table_html not in enhanced
+        assert "[Chart Summary] A bar chart." in enhanced
+        assert "| Col A |" in enhanced
+
+    @pytest.mark.asyncio
+    async def test_table_vlm_failure_skips(self, tmp_path: Path):
+        """VLM failure for a table doesn't crash the flow."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        settings = _make_settings(tmp_path)
+
+        table_html = "<table><tr><td>data</td></tr></table>"
+        markdown = f"Text\n{table_html}\nMore"
+        detail = [
+            {
+                "type": "table",
+                "text": table_html,
+                "page_number": 1,
+                "position": {"x": 0, "y": 0, "width": 100, "height": 100},
+            },
+        ]
+
+        with patch("doc_parser.chart_enhance.summarize_table", new_callable=AsyncMock) as mock_vlm:
+            mock_vlm.side_effect = Exception("VLM API error")
+
+            enhanced, chart_count, table_count = await enhance_charts(
+                pdf_path, markdown, detail, settings,
+            )
+
+        assert chart_count == 0
+        assert table_count == 0
+        assert enhanced == markdown  # unchanged on failure
+
+    @pytest.mark.asyncio
+    async def test_only_tables_no_charts(self, tmp_path: Path):
+        """Document with only tables (no charts) is still enhanced."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        settings = _make_settings(tmp_path)
+
+        table_html = '<table><tr><th>X</th></tr><tr><td>1</td></tr></table>'
+        markdown = f"# Data\n\n{table_html}\n\nEnd"
+
+        detail = [
+            {
+                "type": "table",
+                "text": table_html,
+                "page_number": 1,
+                "position": {"x": 50, "y": 50, "width": 400, "height": 200},
+            },
+        ]
+
+        with patch("doc_parser.chart_enhance.summarize_table", new_callable=AsyncMock) as mock_vlm:
+            mock_vlm.return_value = "| X |\n| --- |\n| 1 |"
+
+            enhanced, chart_count, table_count = await enhance_charts(
+                pdf_path, markdown, detail, settings,
+            )
+
+        assert chart_count == 0
+        assert table_count == 1
+        assert table_html not in enhanced
+        assert "| X |" in enhanced

@@ -42,12 +42,13 @@ async def process_file(
     # 1. Parse
     parse_result = await run_parse(settings, file_path, parse_mode=parse_mode)
 
-    # 2. Chart enhancement
+    # 2. Chart and table enhancement
     markdown = parse_result.markdown
     chart_count = 0
-    if settings.vlm_model and parse_result.has_chart:
+    table_count = 0
+    if settings.vlm_model and (parse_result.has_chart or parse_result.has_table):
         try:
-            markdown, chart_count = await enhance_charts(
+            markdown, chart_count, table_count = await enhance_charts(
                 file_path,
                 parse_result.markdown,
                 parse_result.detail,
@@ -56,12 +57,14 @@ async def process_file(
             )
             if chart_count > 0:
                 logger.info("Enhanced %d chart(s) in %s", chart_count, file_name)
+            if table_count > 0:
+                logger.info("Enhanced %d table(s) in %s", table_count, file_name)
         except Exception as exc:
-            logger.warning("Chart enhancement failed for %s: %s", file_name, exc)
+            logger.warning("Chart/table enhancement failed for %s: %s", file_name, exc)
 
-    # 3. Strip TextIn CDN image URLs (enhance_charts does this for chart docs,
-    #    but non-chart docs still have cover/decorative image URLs)
-    if chart_count == 0:
+    # 3. Strip TextIn CDN image URLs (enhance_charts does this for enhanced docs,
+    #    but non-enhanced docs still have cover/decorative image URLs)
+    if chart_count == 0 and table_count == 0:
         markdown = strip_textin_image_urls(markdown)
 
     # 4. Watermark stripping (once, on final markdown)
@@ -103,7 +106,9 @@ async def process_file(
         "parse_info": {
             "page_count": parse_result.total_page_number,
             "has_chart": parse_result.has_chart,
+            "has_table": parse_result.has_table,
             "chart_count": chart_count,
+            "table_count": table_count,
             "duration_ms": parse_result.duration_ms,
             "parse_mode": parse_mode or settings.textin_parse_mode,
         },

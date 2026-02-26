@@ -27,6 +27,18 @@ points, and the main takeaway. Be brief (2-4 sentences). Do not fabricate \
 specific numbers unless they are clearly visible in the chart.\
 """
 
+_TABLE_SYSTEM_PROMPT = """\
+You are a precise table reader. Read the table in the image and output it as \
+a clean markdown table using pipe-delimited format with a header separator row. \
+Reproduce every row and column faithfully. Do not add commentary — output ONLY \
+the markdown table. If a cell is empty, leave it blank between pipes. \
+Use --- for the header separator. Example format:
+
+| Header A | Header B |
+| --- | --- |
+| value 1 | value 2 |
+"""
+
 
 # ---------------------------------------------------------------------------
 # Core functions
@@ -204,6 +216,58 @@ async def summarize_chart(
     return body["choices"][0]["message"]["content"].strip()
 
 
+async def summarize_table(
+    image_bytes: bytes,
+    settings: Settings,
+    page_text: str = "",
+) -> str:
+    """Send a table image to a VLM and return a clean markdown table.
+
+    Same API pattern as summarize_chart but uses the table prompt.
+    """
+    b64 = base64.b64encode(image_bytes).decode()
+
+    user_content: list[dict[str, Any]] = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        },
+    ]
+    if page_text:
+        user_content.append({
+            "type": "text",
+            "text": f"Surrounding text from the same page:\n{page_text}",
+        })
+
+    payload = {
+        "model": settings.vlm_model,
+        "messages": [
+            {"role": "system", "content": _TABLE_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": user_content,
+            },
+        ],
+        "max_tokens": settings.vlm_max_tokens,
+        "temperature": 0.0,
+    }
+
+    url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        headers={
+            "Authorization": f"Bearer {settings.llm_api_key}",
+            "Content-Type": "application/json",
+        },
+    ) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+
+    return body["choices"][0]["message"]["content"].strip()
+
+
 def replace_chart_table(
     markdown: str,
     hallucinated_html: str,
@@ -241,14 +305,35 @@ def replace_chart_table(
     return markdown
 
 
+def replace_table_html(
+    markdown: str,
+    html_table: str,
+    md_table: str,
+) -> str:
+    """Replace an HTML table block in markdown with a VLM-generated markdown table.
+
+    Args:
+        markdown: The full markdown string.
+        html_table: The HTML ``<table>...</table>`` text to find.
+        md_table: The clean markdown table from the VLM.
+
+    Returns:
+        Updated markdown with the HTML table replaced.
+    """
+    text = html_table.strip()
+    if text in markdown:
+        return markdown.replace(text, md_table, 1)
+    return markdown
+
+
 async def enhance_charts(
     pdf_path: str | Path,
     markdown: str,
     detail: list[dict[str, Any]],
     settings: Settings,
     pages: list[dict[str, Any]] | None = None,
-) -> tuple[str, int]:
-    """Orchestrate chart enhancement: find charts, crop, summarize, replace.
+) -> tuple[str, int, int]:
+    """Orchestrate chart and table enhancement: find elements, crop, summarize, replace.
 
     Args:
         pdf_path: Path to the source PDF.
@@ -258,7 +343,7 @@ async def enhance_charts(
         pages: TextIn pages list (with width/height per page) for coordinate scaling.
 
     Returns:
-        Tuple of (enhanced_markdown, chart_count).
+        Tuple of (enhanced_markdown, chart_count, table_count).
     """
     # Find chart elements — either explicitly tagged by TextIn (sub_type=chart)
     # or image elements with substantial OCR text (axis labels, data points)
@@ -268,8 +353,14 @@ async def enhance_charts(
         and (el.get("sub_type") == "chart" or len(el.get("text", "")) > 50)
     ]
 
-    if not chart_elements:
-        return markdown, 0
+    # Find table elements
+    table_elements = [
+        el for el in detail
+        if el.get("type") == "table"
+    ]
+
+    if not chart_elements and not table_elements:
+        return markdown, 0, 0
 
     # Build page size lookup: page_id (1-based) -> (width, height)
     page_sizes: dict[int, tuple[float, float]] = {}
@@ -281,7 +372,9 @@ async def enhance_charts(
 
     enhanced = markdown
     chart_count = 0
+    table_count = 0
 
+    # Process charts
     for el in chart_elements:
         text = el.get("text", "")
         position = el.get("position")
@@ -317,9 +410,44 @@ async def enhance_charts(
                 exc,
             )
 
+    # Process tables
+    for el in table_elements:
+        text = el.get("text", "")
+        position = el.get("position")
+        page_id = el.get("page_id") or el.get("page_number", 1)
+
+        if not text or position is None:
+            logger.warning("Table element missing text or position, skipping")
+            continue
+
+        page_index = page_id - 1
+        textin_page_size = page_sizes.get(page_id)
+
+        try:
+            image_bytes = extract_chart_image(
+                pdf_path, page_index, position,
+                textin_page_size=textin_page_size,
+            )
+            page_text = _gather_page_text(detail, page_id)
+            md_table = await summarize_table(image_bytes, settings, page_text=page_text)
+            enhanced = replace_table_html(enhanced, text, md_table)
+            table_count += 1
+            logger.info(
+                "Enhanced table on page %d (%d chars -> %d chars)",
+                page_id,
+                len(text),
+                len(md_table),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to enhance table on page %d: %s",
+                page_id,
+                exc,
+            )
+
     enhanced = strip_textin_image_urls(enhanced)
     enhanced = strip_watermarks(enhanced)
-    return enhanced, chart_count
+    return enhanced, chart_count, table_count
 
 
 def strip_textin_image_urls(markdown: str) -> str:
