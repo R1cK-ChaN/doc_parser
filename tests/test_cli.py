@@ -85,7 +85,9 @@ def test_parse_local_success(runner: CliRunner, tmp_path):
 
     with (
         patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.process_local_file", new_callable=AsyncMock, return_value=42),
+        patch("doc_parser.pipeline.ensure_doc_file", new_callable=AsyncMock, return_value=1),
+        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=42),
+        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=42),
     ):
         mock_settings = MagicMock()
         mock_init.return_value = mock_settings
@@ -102,7 +104,9 @@ def test_parse_local_skipped(runner: CliRunner, tmp_path):
 
     with (
         patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.process_local_file", new_callable=AsyncMock, return_value=None),
+        patch("doc_parser.pipeline.ensure_doc_file", new_callable=AsyncMock, return_value=1),
+        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=None),
+        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=None),
     ):
         mock_settings = MagicMock()
         mock_init.return_value = mock_settings
@@ -120,7 +124,9 @@ def test_parse_file_success(runner: CliRunner):
     """parse-file prints success with the doc_parse ID."""
     with (
         patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.process_drive_file", new_callable=AsyncMock, return_value=99),
+        patch("doc_parser.pipeline.ensure_drive_doc_file", new_callable=AsyncMock, return_value=1),
+        patch("doc_parser.steps.step2_parse.run_parse", new_callable=AsyncMock, return_value=99),
+        patch("doc_parser.steps.run_parse", new_callable=AsyncMock, return_value=99),
     ):
         mock_settings = MagicMock()
         mock_init.return_value = mock_settings
@@ -138,7 +144,7 @@ def test_parse_folder_success(runner: CliRunner):
     """parse-folder prints parsed/skipped counts."""
     with (
         patch("doc_parser.cli._init_db_engine") as mock_init,
-        patch("doc_parser.pipeline.process_folder", new_callable=AsyncMock, return_value=[1, 2, None]),
+        patch("doc_parser.pipeline.parse_drive_folder", new_callable=AsyncMock, return_value=[1, 2, None]),
     ):
         mock_settings = MagicMock()
         mock_init.return_value = mock_settings

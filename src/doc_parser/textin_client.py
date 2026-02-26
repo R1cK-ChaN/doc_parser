@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Endpoints
 # ---------------------------------------------------------------------------
 
-SYNC_ENDPOINT = "https://api.textin.com/ai/service/v1/pdf_to_markdown"
 PARSEX_ENDPOINT = "https://api.textin.com/ai/service/v1/x_to_markdown"
 EXTRACTION_ENDPOINT = "https://api.textin.com/ai/service/v2/entity_extraction"
 
@@ -32,21 +31,9 @@ EXTRACTION_ENDPOINT = "https://api.textin.com/ai/service/v2/entity_extraction"
 # Default params
 # ---------------------------------------------------------------------------
 
-DEFAULT_PARAMS = {
-    "parse_mode": "auto",
-    "remove_watermark": "1",
-    "apply_chart": "1",
-    "get_excel": "1",
-    "page_details": "1",
-    "markdown_details": "1",
-    "apply_merge": "1",
-    "table_flavor": "html",
-    "dpi": "144",
-}
-
 DEFAULT_PARSEX_PARAMS = {
     "pdf_parse_mode": "auto",
-    "remove_watermark": "0",
+    "remove_watermark": "1",
     "md_detail": "2",
     "md_table_flavor": "html",
     "md_title": "1",
@@ -149,68 +136,6 @@ class TextInClient:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    # -------------------------------------------------------------------
-    # Legacy parse (kept for backward compatibility)
-    # -------------------------------------------------------------------
-
-    def _build_params(
-        self,
-        parse_mode: str | None = None,
-        get_excel: bool = True,
-        apply_chart: bool = True,
-    ) -> dict[str, str]:
-        """Build query params from defaults + overrides."""
-        params = dict(DEFAULT_PARAMS)
-        params["parse_mode"] = parse_mode or self.default_parse_mode
-        if not get_excel:
-            params["get_excel"] = "0"
-        if not apply_chart:
-            params["apply_chart"] = "0"
-        return params
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=4, min=4, max=16),
-        retry=retry_if_exception(_is_retryable),
-        reraise=True,
-    )
-    async def parse_file(
-        self,
-        file_path: Path,
-        *,
-        parse_mode: str | None = None,
-        get_excel: bool = True,
-        apply_chart: bool = True,
-    ) -> ParseResult:
-        """Parse a file via the TextIn sync endpoint (legacy).
-
-        Sends the file as binary body (application/octet-stream)
-        with config as query params.
-        """
-        params = self._build_params(parse_mode, get_excel, apply_chart)
-        file_bytes = file_path.read_bytes()
-
-        client = await self._get_client()
-        logger.info("Sending %s to TextIn (%d bytes, mode=%s)", file_path.name, len(file_bytes), params["parse_mode"])
-
-        resp = await client.post(
-            SYNC_ENDPOINT,
-            params=params,
-            content=file_bytes,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        resp.raise_for_status()
-        body = resp.json()
-
-        # TextIn wraps results in {"code": 200, "result": {...}}
-        code = body.get("code", 0)
-        if code != 200:
-            msg = body.get("message", "Unknown TextIn error")
-            raise TextInAPIError(code, msg)
-
-        result_data = body.get("result", {})
-        return self._parse_response(result_data, params)
-
     def _parse_response(self, data: dict[str, Any], params: dict[str, str]) -> ParseResult:
         """Convert the TextIn JSON response into a ParseResult."""
         detail = data.get("detail", [])
@@ -237,17 +162,8 @@ class TextInClient:
             src_page_count=data.get("src_page_count", 0),
         )
 
-    def get_parse_config(
-        self,
-        parse_mode: str | None = None,
-        get_excel: bool = True,
-        apply_chart: bool = True,
-    ) -> dict[str, str]:
-        """Return the params dict that would be sent — for DB storage."""
-        return self._build_params(parse_mode, get_excel, apply_chart)
-
     # -------------------------------------------------------------------
-    # Step 2: ParseX (x_to_markdown)
+    # ParseX (x_to_markdown)
     # -------------------------------------------------------------------
 
     def _build_parsex_params(

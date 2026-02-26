@@ -103,28 +103,25 @@ def parse(file_id: int, force: bool, parse_mode: str | None, no_excel: bool) -> 
 @click.option("--reparse", is_flag=True, help="Re-parse files that already have a completed parse.")
 @click.option("--parse-mode", default=None, help="TextIn parse mode override.")
 @click.option("--no-excel", is_flag=True, help="Skip Excel extraction.")
-@click.option("--no-chart", is_flag=True, help="Skip chart recognition.")
 def parse_folder(
     folder_id: str,
     reparse: bool,
     parse_mode: str | None,
     no_excel: bool,
-    no_chart: bool,
 ) -> None:
     """Parse all supported files in a Google Drive folder."""
-    from doc_parser.pipeline import process_folder
+    from doc_parser.pipeline import parse_drive_folder
 
     settings = _init_db_engine()
     settings.ensure_dirs()
 
     results = asyncio.run(
-        process_folder(
+        parse_drive_folder(
             settings,
             folder_id,
-            reparse=reparse,
+            force=reparse,
             parse_mode=parse_mode,
             get_excel=not no_excel,
-            apply_chart=not no_chart,
         )
     )
 
@@ -138,30 +135,29 @@ def parse_folder(
 @click.option("--reparse", is_flag=True, help="Re-parse even if already completed.")
 @click.option("--parse-mode", default=None, help="TextIn parse mode override.")
 @click.option("--no-excel", is_flag=True, help="Skip Excel extraction.")
-@click.option("--no-chart", is_flag=True, help="Skip chart recognition.")
 def parse_file(
     file_id: str,
     reparse: bool,
     parse_mode: str | None,
     no_excel: bool,
-    no_chart: bool,
 ) -> None:
     """Parse a single file from Google Drive."""
-    from doc_parser.pipeline import process_drive_file
+    from doc_parser.pipeline import ensure_drive_doc_file
+    from doc_parser.steps import run_parse
 
     settings = _init_db_engine()
     settings.ensure_dirs()
 
-    result = asyncio.run(
-        process_drive_file(
-            settings,
-            file_id,
-            reparse=reparse,
+    async def _run():
+        doc_file_id = await ensure_drive_doc_file(settings, file_id)
+        return await run_parse(
+            settings, doc_file_id,
+            force=reparse,
             parse_mode=parse_mode,
             get_excel=not no_excel,
-            apply_chart=not no_chart,
         )
-    )
+
+    result = asyncio.run(_run())
 
     if result:
         console.print(f"[green]Parse complete.[/green] doc_parse.id={result}")
@@ -174,30 +170,29 @@ def parse_file(
 @click.option("--reparse", is_flag=True, help="Re-parse even if already completed.")
 @click.option("--parse-mode", default=None, help="TextIn parse mode override.")
 @click.option("--no-excel", is_flag=True, help="Skip Excel extraction.")
-@click.option("--no-chart", is_flag=True, help="Skip chart recognition.")
 def parse_local(
     path: Path,
     reparse: bool,
     parse_mode: str | None,
     no_excel: bool,
-    no_chart: bool,
 ) -> None:
     """Parse a local file (skip Google Drive, for testing)."""
-    from doc_parser.pipeline import process_local_file
+    from doc_parser.pipeline import ensure_doc_file
+    from doc_parser.steps import run_parse
 
     settings = _init_db_engine()
     settings.ensure_dirs()
 
-    result = asyncio.run(
-        process_local_file(
-            settings,
-            path,
-            reparse=reparse,
+    async def _run():
+        doc_file_id = await ensure_doc_file(settings, path)
+        return await run_parse(
+            settings, doc_file_id,
+            force=reparse,
             parse_mode=parse_mode,
             get_excel=not no_excel,
-            apply_chart=not no_chart,
         )
-    )
+
+    result = asyncio.run(_run())
 
     if result:
         console.print(f"[green]Parse complete.[/green] doc_parse.id={result}")
