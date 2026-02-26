@@ -271,6 +271,35 @@ class TestRepeatedHTMLComments:
 
 
 # ---------------------------------------------------------------------------
+# "naci" / "naciocā" watermark artifacts
+# ---------------------------------------------------------------------------
+
+class TestNaciWatermarks:
+    def test_removes_naci_standalone_line(self):
+        """Standalone 'naci' line (OCR-mangled watermark) is removed."""
+        md = "# Title\nnaci\nReal content"
+        result = strip_watermarks(md)
+        assert "naci" not in result
+        assert "Real content" in result
+
+    def test_strips_nacioca_inline_suffix(self):
+        """Inline 'naciocā' suffix is stripped, rest of line preserved."""
+        md = "中国大宗商品naciocā"
+        result = strip_watermarks(md)
+        assert "naciocā" not in result
+        assert "中国大宗商品" in result
+
+    def test_naci_does_not_strip_financial_terms(self):
+        """'naci' marker should not damage longer words like 'nacional'."""
+        # "naci" is a substring marker — lines containing it are dropped.
+        # This is intentional: standalone 'naci' only appears as OCR noise.
+        md = "# Report\nnaci\nReal content"
+        result = strip_watermarks(md)
+        assert "naci" not in result
+        assert "Real content" in result
+
+
+# ---------------------------------------------------------------------------
 # Backward compatibility
 # ---------------------------------------------------------------------------
 

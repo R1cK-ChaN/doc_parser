@@ -28,6 +28,11 @@ WATERMARK_MARKERS = (
     "查看微博主页",
     "微信收藏",
     "GMF Research（坦途宏观）",
+    "进群",
+    "加v",
+    "加V",
+    "1开学",
+    "naci",
 )
 
 # Regex patterns that match an entire line (anchored)
@@ -63,6 +68,7 @@ WATERMARK_INLINE_SUBS = [
     (re.compile(r"macroamy整理"), ""),
     (re.compile(r"nacroany整理"), ""),
     (re.compile(r"roamy整理"), ""),
+    (re.compile(r"naciocā"), ""),
 ]
 
 

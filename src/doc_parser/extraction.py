@@ -81,6 +81,12 @@ from the document text. Return ONLY valid JSON with these keys:
 
 {field_descriptions}
 
+The source text was produced by OCR and may contain character-level errors. \
+In Chinese text, visually similar characters are often swapped \
+(e.g., 周↔風, 辩↔牌, 宗↔资, 期↔朋). Use financial domain knowledge to \
+correct likely OCR mistakes — prefer well-known financial terms and proper \
+nouns over unlikely character combinations.
+
 For any field you cannot determine, use null.\
 """
 

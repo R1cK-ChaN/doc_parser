@@ -12,6 +12,7 @@ import pytest
 
 from doc_parser.chart_enhance import (
     _gather_page_text,
+    _table_has_data,
     enhance_charts,
     extract_chart_image,
     replace_chart_table,
@@ -722,6 +723,38 @@ class TestSummarizeTable:
 
 
 # ---------------------------------------------------------------------------
+# _table_has_data
+# ---------------------------------------------------------------------------
+
+
+class TestTableHasData:
+    def test_valid_table_with_data(self):
+        md = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+        assert _table_has_data(md) is True
+
+    def test_header_only_no_data(self):
+        md = "| A | B | C |\n| --- | --- | --- |"
+        assert _table_has_data(md) is False
+
+    def test_multiple_data_rows(self):
+        md = "| X |\n| --- |\n| 1 |\n| 2 |\n| 3 |"
+        assert _table_has_data(md) is True
+
+    def test_empty_string(self):
+        assert _table_has_data("") is False
+
+    def test_single_line(self):
+        assert _table_has_data("| A | B |") is False
+
+    def test_wide_header_only(self):
+        """37-column header with no body (the real-world failure case)."""
+        cols = " | ".join(f"Col{i}" for i in range(37))
+        sep = " | ".join("---" for _ in range(37))
+        md = f"| {cols} |\n| {sep} |"
+        assert _table_has_data(md) is False
+
+
+# ---------------------------------------------------------------------------
 # enhance_charts with table elements
 # ---------------------------------------------------------------------------
 
@@ -831,6 +864,38 @@ class TestEnhanceChartsWithTables:
         assert chart_count == 0
         assert table_count == 0
         assert enhanced == markdown  # unchanged on failure
+
+    @pytest.mark.asyncio
+    async def test_empty_vlm_table_rejected(self, tmp_path: Path):
+        """VLM table with header only (no data rows) is rejected; original HTML kept."""
+        pdf_path = _create_test_pdf(tmp_path / "test.pdf")
+        settings = _make_settings(tmp_path)
+
+        table_html = '<table border="1"><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>'
+        markdown = f"# Report\n\n{table_html}\n\nEnd"
+
+        detail = [
+            {
+                "type": "table",
+                "text": table_html,
+                "page_number": 1,
+                "position": {"x": 100, "y": 100, "width": 300, "height": 200},
+            },
+        ]
+
+        # VLM returns a header-only table (no data rows)
+        empty_table = "| Col1 | Col2 | Col3 |\n| --- | --- | --- |"
+
+        with patch("doc_parser.chart_enhance.summarize_table", new_callable=AsyncMock) as mock_vlm:
+            mock_vlm.return_value = empty_table
+
+            enhanced, chart_count, table_count = await enhance_charts(
+                pdf_path, markdown, detail, settings,
+            )
+
+        assert chart_count == 0
+        assert table_count == 0  # rejected — not counted
+        assert table_html in enhanced  # original HTML preserved
 
     @pytest.mark.asyncio
     async def test_only_tables_no_charts(self, tmp_path: Path):

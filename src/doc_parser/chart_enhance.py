@@ -268,6 +268,24 @@ async def summarize_table(
     return body["choices"][0]["message"]["content"].strip()
 
 
+def _table_has_data(md_table: str) -> bool:
+    """Check whether a markdown table has at least one data row.
+
+    A valid table needs: header row, separator row (``| --- |``), and at least
+    one data row after the separator.  Returns False for header-only tables.
+    """
+    lines = [ln for ln in md_table.strip().splitlines() if ln.strip()]
+    if len(lines) < 3:
+        return False
+    # Find the separator row (contains only pipes, dashes, spaces, colons)
+    for i, line in enumerate(lines):
+        stripped = line.strip().strip("|").strip()
+        if stripped and all(ch in "-: |" for ch in stripped):
+            # There must be at least one row after the separator
+            return i < len(lines) - 1
+    return False
+
+
 def replace_chart_table(
     markdown: str,
     hallucinated_html: str,
@@ -430,6 +448,12 @@ async def enhance_charts(
             )
             page_text = _gather_page_text(detail, page_id)
             md_table = await summarize_table(image_bytes, settings, page_text=page_text)
+            if not _table_has_data(md_table):
+                logger.warning(
+                    "VLM returned empty table on page %d (header only, no data rows) — keeping original HTML",
+                    page_id,
+                )
+                continue
             enhanced = replace_table_html(enhanced, text, md_table)
             table_count += 1
             logger.info(
