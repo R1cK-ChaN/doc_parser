@@ -33,6 +33,10 @@ WATERMARK_MARKERS = (
     "加V",
     "1开学",
     "naci",
+    "赞赏",
+    "喜欢这个主题",
+    "分享至",
+    "评论(0)",
 )
 
 # Regex patterns that match an entire line (anchored)

@@ -87,6 +87,10 @@ In Chinese text, visually similar characters are often swapped \
 correct likely OCR mistakes — prefer well-known financial terms and proper \
 nouns over unlikely character combinations.
 
+Today's date is {today}. For publish_date, extract the date exactly as it \
+appears in the document text — do not substitute a different year based on \
+assumptions.
+
 For any field you cannot determine, use null.\
 """
 
@@ -129,7 +133,11 @@ class LLMExtractionProvider:
         field_lines = "\n".join(
             f'- "{f["key"]}": {f["description"]}' for f in fields
         )
-        system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(field_descriptions=field_lines)
+        from datetime import date
+        system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
+            field_descriptions=field_lines,
+            today=date.today().isoformat(),
+        )
 
         # Truncate markdown to configured limit
         context = markdown[: self._settings.llm_context_chars]

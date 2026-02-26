@@ -300,6 +300,32 @@ class TestNaciWatermarks:
 
 
 # ---------------------------------------------------------------------------
+# Social UI chrome removal
+# ---------------------------------------------------------------------------
+
+class TestSocialUIChrome:
+    def test_removes_zanshang(self):
+        md = "Real content\n嵒赞赏\nMore content"
+        result = strip_watermarks(md)
+        assert "赞赏" not in result
+        assert "Real content" in result
+        assert "More content" in result
+
+    def test_removes_like_theme_prompt(self):
+        md = "Content\n喜欢这个主题？赞赏一下作者\nEnd"
+        result = strip_watermarks(md)
+        assert "喜欢这个主题" not in result
+        assert "End" in result
+
+    def test_removes_share_and_comments(self):
+        md = "Content\n分享至\n\n评论(0)"
+        result = strip_watermarks(md)
+        assert "分享至" not in result
+        assert "评论(0)" not in result
+        assert "Content" in result
+
+
+# ---------------------------------------------------------------------------
 # Backward compatibility
 # ---------------------------------------------------------------------------
 
