@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-WATERMARK_MARKERS = ("macroamy",)
+WATERMARK_MARKERS = ("macroamy", "nacroany", "付费", "扫一扫")
 
 
 def strip_watermark_lines(markdown: str) -> str:

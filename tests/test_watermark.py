@@ -20,6 +20,19 @@ class TestStripWatermarkLines:
         assert "Line 1" in result
         assert "Line 2" in result
 
+    def test_removes_nacroany_lines(self):
+        md = "# Title\nnacroany watermark line\nReal content"
+        result = strip_watermark_lines(md)
+        assert "nacroany" not in result
+        assert "Real content" in result
+
+    def test_removes_paid_and_scan_lines(self):
+        md = "# Title\n付费加v入群\nReal content\n打开微博我页扫一扫"
+        result = strip_watermark_lines(md)
+        assert "付费" not in result
+        assert "扫一扫" not in result
+        assert "Real content" in result
+
     def test_preserves_clean_markdown(self):
         md = "# Report\n\nSome analysis\n\nConclusion"
         result = strip_watermark_lines(md)
