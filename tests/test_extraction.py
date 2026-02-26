@@ -1,4 +1,4 @@
-"""Tests for doc_parser.extraction — provider protocol + implementations."""
+"""Tests for doc_parser.extraction — LLM extraction provider."""
 
 from __future__ import annotations
 
@@ -11,9 +11,7 @@ import pytest
 
 from doc_parser.config import Settings
 from doc_parser.extraction import (
-    ExtractionProvider,
     LLMExtractionProvider,
-    TextInExtractionProvider,
     _parse_json_response,
     create_extraction_provider,
 )
@@ -24,13 +22,11 @@ from doc_parser.textin_client import EXTRACTION_FIELDS, ExtractionResult
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_settings(tmp_path: Path, provider: str = "textin") -> Settings:
+def _make_settings(tmp_path: Path) -> Settings:
     return Settings(
         textin_app_id="test-app",
         textin_secret_code="test-secret",
-        database_url="sqlite+aiosqlite://",
         data_dir=tmp_path / "data",
-        extraction_provider=provider,
         llm_api_key="test-key",
         llm_base_url="https://test.openrouter.ai/api/v1",
         llm_model="openai/gpt-4o-mini",
@@ -38,73 +34,13 @@ def _make_settings(tmp_path: Path, provider: str = "textin") -> Settings:
 
 
 # ---------------------------------------------------------------------------
-# Protocol compliance
-# ---------------------------------------------------------------------------
-
-def test_textin_provider_is_extraction_provider(tmp_path: Path):
-    """TextInExtractionProvider satisfies the ExtractionProvider protocol."""
-    settings = _make_settings(tmp_path)
-    provider = TextInExtractionProvider(settings)
-    assert isinstance(provider, ExtractionProvider)
-
-
-def test_llm_provider_is_extraction_provider(tmp_path: Path):
-    """LLMExtractionProvider satisfies the ExtractionProvider protocol."""
-    settings = _make_settings(tmp_path, provider="llm")
-    provider = LLMExtractionProvider(settings)
-    assert isinstance(provider, ExtractionProvider)
-
-
-# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
-def test_factory_returns_textin_by_default(tmp_path: Path):
-    settings = _make_settings(tmp_path, provider="textin")
-    provider = create_extraction_provider(settings)
-    assert isinstance(provider, TextInExtractionProvider)
-
-
-def test_factory_returns_llm_when_configured(tmp_path: Path):
-    settings = _make_settings(tmp_path, provider="llm")
+def test_factory_returns_llm(tmp_path: Path):
+    settings = _make_settings(tmp_path)
     provider = create_extraction_provider(settings)
     assert isinstance(provider, LLMExtractionProvider)
-
-
-# ---------------------------------------------------------------------------
-# TextInExtractionProvider
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_textin_provider_requires_file_path(tmp_path: Path):
-    """TextInExtractionProvider raises ValueError without file_path."""
-    settings = _make_settings(tmp_path)
-    provider = TextInExtractionProvider(settings)
-    with pytest.raises(ValueError, match="file_path"):
-        await provider.extract(fields=EXTRACTION_FIELDS)
-    await provider.close()
-
-
-@pytest.mark.asyncio
-async def test_textin_provider_delegates_to_client(tmp_path: Path):
-    """TextInExtractionProvider delegates to TextInClient.extract_entities()."""
-    settings = _make_settings(tmp_path)
-    provider = TextInExtractionProvider(settings)
-
-    mock_result = ExtractionResult(
-        fields={"title": "Test Report"},
-        duration_ms=100,
-        request_id="ext-test",
-    )
-
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF test")
-
-    with patch.object(provider._client, "extract_entities", new_callable=AsyncMock, return_value=mock_result):
-        result = await provider.extract(file_path=pdf, fields=EXTRACTION_FIELDS)
-        assert result.fields["title"] == "Test Report"
-
-    await provider.close()
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +50,7 @@ async def test_textin_provider_delegates_to_client(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_llm_provider_requires_markdown(tmp_path: Path):
     """LLMExtractionProvider raises ValueError without markdown."""
-    settings = _make_settings(tmp_path, provider="llm")
+    settings = _make_settings(tmp_path)
     provider = LLMExtractionProvider(settings)
     with pytest.raises(ValueError, match="markdown"):
         await provider.extract(fields=EXTRACTION_FIELDS)
@@ -124,7 +60,7 @@ async def test_llm_provider_requires_markdown(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_llm_provider_calls_chat_completions(tmp_path: Path):
     """LLMExtractionProvider calls the chat completions endpoint."""
-    settings = _make_settings(tmp_path, provider="llm")
+    settings = _make_settings(tmp_path)
     provider = LLMExtractionProvider(settings)
 
     llm_response = {
@@ -176,7 +112,7 @@ async def test_llm_provider_calls_chat_completions(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_llm_provider_truncates_context(tmp_path: Path):
     """LLMExtractionProvider truncates markdown to llm_context_chars."""
-    settings = _make_settings(tmp_path, provider="llm")
+    settings = _make_settings(tmp_path)
     settings.llm_context_chars = 50
     provider = LLMExtractionProvider(settings)
 

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import mimetypes
 import time
 from pathlib import Path
 
 from doc_parser.config import Settings
-from doc_parser.google_drive import GoogleDriveClient
 from doc_parser.hasher import sha256_file
 from doc_parser.storage import has_result, load_result, save_result
 from doc_parser.steps.step2_parse import run_parse
@@ -87,7 +85,6 @@ async def process_file(
         "local_path": str(file_path),
         "mime_type": mime_type,
         "file_size_bytes": file_path.stat().st_size,
-        "drive_folder_id": extra_meta.get("drive_folder_id"),
         "processed_at": int(time.time()),
 
         "title": fields.get("title"),
@@ -113,8 +110,8 @@ async def process_file(
             "parse_mode": parse_mode or settings.textin_parse_mode,
         },
         "extraction_info": {
-            "provider": settings.extraction_provider,
-            "llm_model": settings.llm_model if settings.extraction_provider == "llm" else None,
+            "provider": "llm",
+            "llm_model": settings.llm_model,
             "duration_ms": ext_result.duration_ms,
         },
     }
@@ -143,68 +140,6 @@ async def process_local(
         parse_mode=parse_mode,
     )
     return sha if result is not None else None
-
-
-async def process_drive_file(
-    settings: Settings,
-    drive_file_id: str,
-    *,
-    force: bool = False,
-    parse_mode: str | None = None,
-) -> str | None:
-    """Download and process a Drive file. Returns sha256 or None if skipped."""
-    drive = GoogleDriveClient(settings)
-    meta = await drive.get_file_metadata(drive_file_id)
-
-    download_dir = settings.data_dir / "downloads"
-    download_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = download_dir / meta.name
-
-    await drive.download_file(drive_file_id, dest_path)
-
-    sha = sha256_file(dest_path)
-    result = await process_file(
-        settings, sha, dest_path,
-        source="drive",
-        file_name=meta.name,
-        force=force,
-        parse_mode=parse_mode,
-        drive_folder_id=meta.parents[0] if meta.parents else None,
-    )
-    return sha if result is not None else None
-
-
-async def process_drive_folder(
-    settings: Settings,
-    folder_id: str,
-    *,
-    force: bool = False,
-    parse_mode: str | None = None,
-) -> list[str | None]:
-    """Process all files in a Drive folder with semaphore concurrency."""
-    drive = GoogleDriveClient(settings)
-    files = await drive.list_files(folder_id)
-
-    if not files:
-        logger.warning("No supported files found in folder %s", folder_id)
-        return []
-
-    semaphore = asyncio.Semaphore(settings.textin_max_concurrent)
-
-    async def _process(df) -> str | None:
-        async with semaphore:
-            try:
-                return await process_drive_file(
-                    settings, df.file_id,
-                    force=force,
-                    parse_mode=parse_mode,
-                )
-            except Exception:
-                logger.exception("Failed to process %s", df.name)
-                return None
-
-    results = await asyncio.gather(*[_process(f) for f in files])
-    return list(results)
 
 
 async def re_extract(
@@ -246,8 +181,8 @@ async def re_extract(
     existing["ticker_symbol"] = fields.get("ticker_symbol")
     existing["processed_at"] = int(time.time())
     existing["extraction_info"] = {
-        "provider": settings.extraction_provider,
-        "llm_model": settings.llm_model if settings.extraction_provider == "llm" else None,
+        "provider": "llm",
+        "llm_model": settings.llm_model,
         "duration_ms": ext_result.duration_ms,
     }
 

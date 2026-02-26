@@ -26,13 +26,6 @@ class Settings(BaseSettings):
     textin_parse_mode: str = "auto"
     textin_max_concurrent: int = 3
 
-    # Google Drive auth
-    google_credentials_file: str = "credentials.json"
-    google_service_account: bool = False
-
-    # Extraction provider: "llm" or "textin"
-    extraction_provider: str = "llm"
-
     # LLM extraction settings (OpenRouter / OpenAI-compatible)
     llm_api_key: str = ""
     llm_base_url: str = "https://openrouter.ai/api/v1"

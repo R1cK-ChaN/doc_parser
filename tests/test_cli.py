@@ -50,17 +50,16 @@ def test_help_shows_commands(runner: CliRunner):
     """Help output includes expected commands."""
     result = runner.invoke(cli, ["--help"])
     assert "parse-local" in result.output
-    assert "parse-file" in result.output
-    assert "parse-folder" in result.output
     assert "re-extract" in result.output
     assert "status" in result.output
-    assert "list-files" in result.output
 
 
 def test_help_no_removed_commands(runner: CliRunner):
     """Help output does not include removed commands."""
     result = runner.invoke(cli, ["--help"])
-    # These commands should be removed
+    assert "parse-file" not in result.output
+    assert "parse-folder" not in result.output
+    assert "list-files" not in result.output
     assert "init-db" not in result.output
     assert "run-all" not in result.output
     assert "extract-folder" not in result.output
@@ -105,45 +104,6 @@ def test_parse_local_skipped(runner: CliRunner, tmp_path):
         result = runner.invoke(cli, ["parse-local", str(pdf)])
         assert result.exit_code == 0
         assert "Skipped" in result.output
-
-
-# ---------------------------------------------------------------------------
-# parse-file
-# ---------------------------------------------------------------------------
-
-def test_parse_file_success(runner: CliRunner):
-    """parse-file prints success."""
-    sha = "b" * 64
-
-    with (
-        patch("doc_parser.cli.get_settings") as mock_gs,
-        patch("doc_parser.pipeline.process_drive_file", new_callable=AsyncMock, return_value=sha),
-    ):
-        mock_settings = MagicMock()
-        mock_gs.return_value = mock_settings
-
-        result = runner.invoke(cli, ["parse-file", "drive-file-id"])
-        assert result.exit_code == 0
-        assert "Done" in result.output
-
-
-# ---------------------------------------------------------------------------
-# parse-folder
-# ---------------------------------------------------------------------------
-
-def test_parse_folder_success(runner: CliRunner):
-    """parse-folder prints processed/skipped counts."""
-    with (
-        patch("doc_parser.cli.get_settings") as mock_gs,
-        patch("doc_parser.pipeline.process_drive_folder", new_callable=AsyncMock, return_value=["sha1", "sha2", None]),
-    ):
-        mock_settings = MagicMock()
-        mock_gs.return_value = mock_settings
-
-        result = runner.invoke(cli, ["parse-folder", "folder-abc"])
-        assert result.exit_code == 0
-        assert "Processed: 2" in result.output
-        assert "Skipped: 1" in result.output
 
 
 # ---------------------------------------------------------------------------

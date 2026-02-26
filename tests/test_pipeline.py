@@ -10,10 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from doc_parser.config import Settings
-from doc_parser.google_drive import DriveFile
 from doc_parser.pipeline import (
-    process_drive_file,
-    process_drive_folder,
     process_local,
     re_extract,
 )
@@ -30,7 +27,6 @@ def _make_settings(tmp_path: Path) -> Settings:
         textin_app_id="test-app",
         textin_secret_code="test-secret",
         data_dir=tmp_path / "data",
-        extraction_provider="textin",
     )
     s.ensure_dirs()
     return s
@@ -99,7 +95,7 @@ async def test_process_local_writes_json(tmp_path: Path):
     assert result["ticker_symbol"] == "AAPL"
     assert result["markdown"] is not None
     assert result["parse_info"]["page_count"] == 1
-    assert result["extraction_info"]["provider"] == "textin"
+    assert result["extraction_info"]["provider"] == "llm"
 
 
 @pytest.mark.asyncio
@@ -158,66 +154,6 @@ async def test_process_local_force_reprocesses(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# process_drive_file
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_process_drive_file(tmp_path: Path):
-    """process_drive_file downloads, processes, and writes JSON."""
-    settings = _make_settings(tmp_path)
-
-    drive_meta = DriveFile(
-        file_id="drive-f1",
-        name="analysis.pdf",
-        mime_type="application/pdf",
-        size=4096,
-        created_time=datetime(2025, 6, 1),
-        parents=["folder-1"],
-    )
-
-    async def _fake_download(file_id, dest_path):
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        dest_path.write_bytes(b"%PDF drive content")
-        return dest_path
-
-    with (
-        patch("doc_parser.pipeline.GoogleDriveClient") as MockDrive,
-        patch("doc_parser.pipeline.run_parse", new_callable=AsyncMock, return_value=_mock_parse_result()),
-        patch("doc_parser.pipeline.run_extraction", new_callable=AsyncMock, return_value=_mock_extraction_result()),
-    ):
-        mock_drive = AsyncMock()
-        mock_drive.get_file_metadata = AsyncMock(return_value=drive_meta)
-        mock_drive.download_file = AsyncMock(side_effect=_fake_download)
-        MockDrive.return_value = mock_drive
-
-        sha = await process_drive_file(settings, "drive-f1")
-
-    assert sha is not None
-    result = load_result(settings.extraction_path, sha)
-    assert result["source"] == "drive"
-    assert result["file_name"] == "analysis.pdf"
-    assert result["drive_folder_id"] == "folder-1"
-
-
-# ---------------------------------------------------------------------------
-# process_drive_folder
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_process_drive_folder_empty(tmp_path: Path):
-    """process_drive_folder returns [] for an empty folder."""
-    settings = _make_settings(tmp_path)
-
-    with patch("doc_parser.pipeline.GoogleDriveClient") as MockDrive:
-        mock_drive = AsyncMock()
-        mock_drive.list_files = AsyncMock(return_value=[])
-        MockDrive.return_value = mock_drive
-
-        results = await process_drive_folder(settings, "empty-folder")
-        assert results == []
-
-
-# ---------------------------------------------------------------------------
 # re_extract
 # ---------------------------------------------------------------------------
 
@@ -238,7 +174,7 @@ async def test_re_extract_updates_fields(tmp_path: Path):
         "broker": "Old Broker",
         "markdown": "# Original markdown",
         "parse_info": {"page_count": 1},
-        "extraction_info": {"provider": "textin"},
+        "extraction_info": {"provider": "llm"},
     }
     save_result(settings.extraction_path, existing)
 

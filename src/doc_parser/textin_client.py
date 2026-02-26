@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,7 +24,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PARSEX_ENDPOINT = "https://api.textin.com/ai/service/v1/x_to_markdown"
-EXTRACTION_ENDPOINT = "https://api.textin.com/ai/service/v2/entity_extraction"
 
 # ---------------------------------------------------------------------------
 # Default params
@@ -242,71 +240,6 @@ class TextInClient:
         """Return the ParseX params dict — for DB storage."""
         return self._build_parsex_params(parse_mode, get_excel, md_detail)
 
-    # -------------------------------------------------------------------
-    # Step 3: Entity Extraction
-    # -------------------------------------------------------------------
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=4, min=4, max=16),
-        retry=retry_if_exception(_is_retryable),
-        reraise=True,
-    )
-    async def extract_entities(
-        self,
-        file_path: Path,
-        fields: list[dict[str, str]] | None = None,
-    ) -> ExtractionResult:
-        """Extract structured entities from a file via TextIn extraction API.
-
-        Sends JSON with base64-encoded file and field definitions.
-        """
-        file_bytes = file_path.read_bytes()
-        file_b64 = base64.b64encode(file_bytes).decode()
-        use_fields = fields or EXTRACTION_FIELDS
-
-        client = await self._get_client()
-        logger.info("Extracting entities from %s (%d bytes, %d fields)", file_path.name, len(file_bytes), len(use_fields))
-
-        payload = {
-            "file": file_b64,
-            "fields": use_fields,
-        }
-
-        resp = await client.post(
-            EXTRACTION_ENDPOINT,
-            json=payload,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-
-        code = body.get("code", 0)
-        if code != 200:
-            msg = body.get("message", "Unknown TextIn error")
-            raise TextInAPIError(code, msg)
-
-        result_data = body.get("result", {})
-        return self._parse_extraction_response(result_data)
-
-    def _parse_extraction_response(self, data: dict[str, Any]) -> ExtractionResult:
-        """Convert the TextIn extraction response into an ExtractionResult."""
-        # Extract field values from the details structure
-        details = data.get("details", {})
-        fields: dict[str, Any] = {}
-        for key, entries in details.items():
-            if isinstance(entries, list) and entries:
-                fields[key] = entries[0].get("value", "")
-            elif isinstance(entries, dict):
-                fields[key] = entries.get("value", "")
-
-        return ExtractionResult(
-            fields=fields,
-            category=data.get("category", {}),
-            detail_structure=data.get("details_list", []),
-            page_count=data.get("page_count", 0),
-            duration_ms=data.get("duration", 0),
-            request_id=data.get("request_id", ""),
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +256,7 @@ class TextInAPIError(Exception):
         super().__init__(f"TextIn API error {code}: {message}")
 
 
+
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
@@ -330,4 +264,5 @@ class TextInAPIError(Exception):
 
 def decode_excel(b64: str) -> bytes:
     """Decode a base64-encoded Excel file from the TextIn response."""
+    import base64
     return base64.b64decode(b64)

@@ -147,39 +147,6 @@ def test_parse_response_missing_fields():
 
 
 # ---------------------------------------------------------------------------
-# _parse_extraction_response
-# ---------------------------------------------------------------------------
-
-def test_parse_extraction_response():
-    """Extraction response is parsed into ExtractionResult."""
-    client = _make_client()
-    data = {
-        "details": {
-            "title": [{"value": "Market Report", "position": {}}],
-            "broker": [{"value": "Goldman Sachs", "position": {}}],
-        },
-        "category": {"type": "research"},
-        "page_count": 5,
-        "duration": 300,
-        "request_id": "ext-1",
-    }
-    result = client._parse_extraction_response(data)
-    assert result.fields["title"] == "Market Report"
-    assert result.fields["broker"] == "Goldman Sachs"
-    assert result.page_count == 5
-    assert result.duration_ms == 300
-    assert result.request_id == "ext-1"
-
-
-def test_parse_extraction_response_empty():
-    """Empty extraction response returns empty fields."""
-    client = _make_client()
-    result = client._parse_extraction_response({})
-    assert result.fields == {}
-    assert result.duration_ms == 0
-
-
-# ---------------------------------------------------------------------------
 # get_parsex_config
 # ---------------------------------------------------------------------------
 
@@ -301,79 +268,6 @@ async def test_parse_file_x_success(tmp_path: Path):
     assert result.markdown == "# ParseX Result"
     assert result.src_page_count == 3
     assert len(result.paragraphs) == 1
-
-
-# ---------------------------------------------------------------------------
-# extract_entities (mocked httpx)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_extract_entities_success(tmp_path: Path):
-    """extract_entities returns ExtractionResult on success."""
-    client = _make_client()
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF-1.4 test")
-
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "code": 200,
-        "result": {
-            "details": {
-                "title": [{"value": "Q4 Report", "position": {}}],
-                "broker": [{"value": "Morgan Stanley", "position": {}}],
-            },
-            "page_count": 10,
-            "duration": 500,
-            "request_id": "ext-r1",
-        },
-    }
-
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    mock_http.is_closed = False
-    client._client = mock_http
-
-    result = await client.extract_entities(pdf)
-    assert isinstance(result, ExtractionResult)
-    assert result.fields["title"] == "Q4 Report"
-    assert result.fields["broker"] == "Morgan Stanley"
-    assert result.page_count == 10
-    assert result.request_id == "ext-r1"
-
-
-@pytest.mark.asyncio
-async def test_extract_entities_custom_fields(tmp_path: Path):
-    """extract_entities accepts custom field definitions."""
-    client = _make_client()
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF-1.4 test")
-
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "code": 200,
-        "result": {
-            "details": {
-                "custom_field": [{"value": "custom_value", "position": {}}],
-            },
-            "duration": 100,
-            "request_id": "ext-custom",
-        },
-    }
-
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    mock_http.is_closed = False
-    client._client = mock_http
-
-    custom_fields = [{"key": "custom_field", "description": "A custom field"}]
-    result = await client.extract_entities(pdf, fields=custom_fields)
-    assert result.fields["custom_field"] == "custom_value"
-
-    # Verify the payload sent had custom fields
-    call_kwargs = mock_http.post.call_args
-    assert call_kwargs.kwargs["json"]["fields"] == custom_fields
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,11 @@
-"""Extraction provider protocol and implementations."""
+"""Extraction provider — LLM-based entity extraction."""
 
 from __future__ import annotations
 
 import json
 import logging
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 import httpx
 from tenacity import (
@@ -19,55 +19,10 @@ from doc_parser.config import Settings
 from doc_parser.textin_client import (
     EXTRACTION_FIELDS,
     ExtractionResult,
-    TextInClient,
     _is_retryable,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Protocol
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class ExtractionProvider(Protocol):
-    async def extract(
-        self,
-        *,
-        file_path: Path | None = None,
-        markdown: str | None = None,
-        fields: list[dict[str, str]],
-    ) -> ExtractionResult: ...
-
-    async def close(self) -> None: ...
-
-
-# ---------------------------------------------------------------------------
-# TextIn implementation (existing behaviour)
-# ---------------------------------------------------------------------------
-
-
-class TextInExtractionProvider:
-    """Delegates to TextInClient.extract_entities() — sends raw file."""
-
-    def __init__(self, settings: Settings) -> None:
-        self._client = TextInClient(settings)
-
-    async def extract(
-        self,
-        *,
-        file_path: Path | None = None,
-        markdown: str | None = None,
-        fields: list[dict[str, str]],
-    ) -> ExtractionResult:
-        if file_path is None:
-            raise ValueError("TextInExtractionProvider requires file_path")
-        return await self._client.extract_entities(file_path, fields=fields)
-
-    async def close(self) -> None:
-        await self._client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +153,6 @@ def _parse_json_response(text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_extraction_provider(settings: Settings) -> ExtractionProvider:
-    """Create an extraction provider based on settings."""
-    if settings.extraction_provider == "llm":
-        return LLMExtractionProvider(settings)
-    return TextInExtractionProvider(settings)
+def create_extraction_provider(settings: Settings) -> LLMExtractionProvider:
+    """Create an LLM extraction provider."""
+    return LLMExtractionProvider(settings)

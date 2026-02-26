@@ -45,7 +45,7 @@ async def run_extraction(
             "Extracted entities: title=%s, broker=%s (provider=%s)",
             result.fields.get("title"),
             result.fields.get("broker"),
-            settings.extraction_provider,
+            "llm",
         )
         return result
     finally:

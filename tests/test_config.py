@@ -70,7 +70,6 @@ def test_default_values():
     s = Settings(textin_app_id="a", textin_secret_code="s")
     assert s.textin_parse_mode == "auto"
     assert s.textin_max_concurrent == 3
-    assert s.google_service_account is False
 
 
 def test_get_settings_factory(tmp_path: Path):
