@@ -47,13 +47,26 @@ nouns over unlikely character combinations.
 
 Today's date is {today}. For publish_date, extract the date exactly as it \
 appears in the document text — do not substitute a different year based on \
-assumptions. data_period refers to the period the data covers, not the \
-publication date (e.g., a CPI report published 2025-02-12 may cover \
-data_period "2025-01").
+assumptions.
 
-For contains_commentary, return true if the document includes qualitative \
-analysis or opinion text from analysts/officials, false if it is purely \
-numerical data tables.
+data_period refers to the period the data covers, not the publication date \
+(e.g., a CPI report published 2025-02-12 may cover data_period "2025-01"). \
+Normalize to these formats: monthly "YYYY-MM", quarterly "YYYY-QN", \
+annual "YYYY". Do not use spelled-out month names or other variations.
+
+For contains_commentary, return true only if the document contains at \
+least one full paragraph of qualitative analysis, interpretation, or \
+opinion from analysts or officials. A document that is purely numerical \
+tables, or that contains only a single sentence of boilerplate summary, \
+should be false.
+
+For language, use the primary language of the document body: "en" or "zh". \
+If the document has substantial content in both languages, use "en,zh".
+
+document_type describes the form of the document (e.g., "Research Report", \
+"Meeting Minutes"). event_type describes the event that triggered the \
+document (e.g., "Economic Release", "Press Conference"). The two may \
+coincide (e.g., both "Policy Statement") — this is expected, not an error.
 
 For any field you cannot determine, use null.\
 """
