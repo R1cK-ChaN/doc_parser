@@ -44,15 +44,20 @@ DEFAULT_PARSEX_PARAMS = {
 
 EXTRACTION_FIELDS = [
     {"key": "title", "description": "Document title or report title"},
-    {"key": "broker", "description": "Brokerage firm or financial institution that published the report"},
-    {"key": "authors", "description": "Author names, analysts who wrote the report"},
-    {"key": "publish_date", "description": "Publication date of the report"},
-    {"key": "market", "description": "Target market (e.g., US, China, Hong Kong, Global)"},
-    {"key": "asset_class", "description": "High-level asset class (e.g., Fixed Income, Equity, FX, Commodity, Real Estate, Multi-Asset, Macro)"},
-    {"key": "sector", "description": "Specific sector or sub-category within the asset class (e.g., Gold, Silver, Healthcare, Technology, Government Bond, Corporate Credit, Interest Rate)"},
-    {"key": "document_type", "description": "Type of document (e.g., Research Report, Market Commentary, Earnings Review)"},
-    {"key": "target_company", "description": "Primary company being analyzed"},
-    {"key": "ticker_symbol", "description": "Stock ticker symbol of the target company"},
+    {"key": "institution", "description": "Publishing institution (e.g., Goldman Sachs, BLS, Federal Reserve, 国家统计局)"},
+    {"key": "authors", "description": "Author names, analysts or spokespersons"},
+    {"key": "publish_date", "description": "Publication date of the document"},
+    {"key": "data_period", "description": "Data reference period if applicable (e.g., 2025-01, Q4 2024), distinct from publish_date"},
+    {"key": "country", "description": "Country or region the document pertains to (e.g., US, CN, EU, Global)"},
+    {"key": "market", "description": "Financial market dimension (e.g., A股, US Treasuries, S&P 500)"},
+    {"key": "asset_class", "description": "High-level asset class (e.g., Fixed Income, Equity, FX, Commodity, Real Estate, Multi-Asset, Macro, Policy)"},
+    {"key": "sector", "description": "Specific sector or topic (e.g., Inflation, Labor Market, Healthcare, Technology, Gold, Interest Rate)"},
+    {"key": "document_type", "description": "Type of document (e.g., Research Report, Market Commentary, Official Press Release, Policy Statement, Meeting Minutes, Policy Report, Press Conference Transcript, Survey Report, News Article, Government Announcement)"},
+    {"key": "event_type", "description": "Event classification if applicable (e.g., Economic Release, Policy Statement, Press Conference, Survey, News Article)"},
+    {"key": "subject", "description": "Core subject or topic (e.g., CPI, Apple Inc., Federal Funds Rate, LPR)"},
+    {"key": "subject_id", "description": "Identifier for the subject if available (e.g., AAPL, CPIAUCSL)"},
+    {"key": "language", "description": "Document language (e.g., en, zh)"},
+    {"key": "contains_commentary", "description": "Whether the document contains qualitative commentary or analysis from officials/analysts (true or false)"},
 ]
 
 # ---------------------------------------------------------------------------

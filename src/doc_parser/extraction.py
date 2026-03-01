@@ -31,8 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are a financial document metadata extractor. Extract the following fields \
-from the document text. Return ONLY valid JSON with these keys:
+You are a financial document metadata extractor. The documents may be \
+broker research reports, government statistical releases, central bank \
+statements, press conference transcripts, news articles, or other \
+financial/economic publications. Extract the following fields from the \
+document text. Return ONLY valid JSON with these keys:
 
 {field_descriptions}
 
@@ -44,7 +47,13 @@ nouns over unlikely character combinations.
 
 Today's date is {today}. For publish_date, extract the date exactly as it \
 appears in the document text — do not substitute a different year based on \
-assumptions.
+assumptions. data_period refers to the period the data covers, not the \
+publication date (e.g., a CPI report published 2025-02-12 may cover \
+data_period "2025-01").
+
+For contains_commentary, return true if the document includes qualitative \
+analysis or opinion text from analysts/officials, false if it is purely \
+numerical data tables.
 
 For any field you cannot determine, use null.\
 """

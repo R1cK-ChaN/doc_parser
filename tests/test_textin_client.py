@@ -212,10 +212,16 @@ def test_extraction_fields_defined():
     """EXTRACTION_FIELDS has the expected keys."""
     keys = {f["key"] for f in EXTRACTION_FIELDS}
     assert "title" in keys
-    assert "broker" in keys
+    assert "institution" in keys
     assert "publish_date" in keys
-    assert "ticker_symbol" in keys
+    assert "subject" in keys
+    assert "subject_id" in keys
     assert "market" in keys
+    assert "country" in keys
+    assert "data_period" in keys
+    assert "event_type" in keys
+    assert "language" in keys
+    assert "contains_commentary" in keys
 
 
 # ---------------------------------------------------------------------------

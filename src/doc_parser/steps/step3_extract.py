@@ -42,9 +42,9 @@ async def run_extraction(
             fields=fields or _default_fields(),
         )
         logger.info(
-            "Extracted entities: title=%s, broker=%s (provider=%s)",
+            "Extracted entities: title=%s, institution=%s (provider=%s)",
             result.fields.get("title"),
-            result.fields.get("broker"),
+            result.fields.get("institution"),
             "llm",
         )
         return result

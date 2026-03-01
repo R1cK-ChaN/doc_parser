@@ -69,14 +69,19 @@ async def test_llm_provider_calls_chat_completions(tmp_path: Path):
             "message": {
                 "content": json.dumps({
                     "title": "LLM Report",
-                    "broker": "Test Broker",
+                    "institution": "Test Broker",
                     "authors": None,
                     "publish_date": "2024-01-15",
+                    "data_period": None,
+                    "country": "US",
                     "market": "US",
                     "sector": "Tech",
                     "document_type": "Research",
-                    "target_company": "TestCorp",
-                    "ticker_symbol": "TST",
+                    "event_type": None,
+                    "subject": "TestCorp",
+                    "subject_id": "TST",
+                    "language": "en",
+                    "contains_commentary": True,
                 }),
             },
         }],
@@ -97,8 +102,8 @@ async def test_llm_provider_calls_chat_completions(tmp_path: Path):
     )
 
     assert result.fields["title"] == "LLM Report"
-    assert result.fields["broker"] == "Test Broker"
-    assert result.fields["ticker_symbol"] == "TST"
+    assert result.fields["institution"] == "Test Broker"
+    assert result.fields["subject_id"] == "TST"
     assert result.request_id == "chatcmpl-test"
 
     # Verify the endpoint called

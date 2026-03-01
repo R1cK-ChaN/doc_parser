@@ -85,7 +85,7 @@ def re_extract_cmd(sha_prefix: str, force: bool) -> None:
     if result:
         console.print(
             f"[green]Re-extracted.[/green] title={result.get('title')}, "
-            f"broker={result.get('broker')}"
+            f"institution={result.get('institution')}"
         )
     else:
         console.print("[red]Re-extraction failed.[/red]")
@@ -112,12 +112,12 @@ def status() -> None:
 
     # Count by source
     sources: dict[str, int] = {}
-    brokers: dict[str, int] = {}
+    institutions: dict[str, int] = {}
     for r in results:
         src = r.get("source", "unknown")
         sources[src] = sources.get(src, 0) + 1
-        broker = r.get("broker") or "unknown"
-        brokers[broker] = brokers.get(broker, 0) + 1
+        institution = r.get("institution") or r.get("broker") or "unknown"
+        institutions[institution] = institutions.get(institution, 0) + 1
 
     console.print(f"\n[bold]Results: {total}[/bold]")
 
@@ -125,9 +125,9 @@ def status() -> None:
     for src, count in sorted(sources.items()):
         console.print(f"  {src}: {count}")
 
-    console.print("\n[bold]By Broker[/bold]")
-    for broker, count in sorted(brokers.items(), key=lambda x: -x[1])[:10]:
-        console.print(f"  {broker}: {count}")
+    console.print("\n[bold]By Institution[/bold]")
+    for inst, count in sorted(institutions.items(), key=lambda x: -x[1])[:10]:
+        console.print(f"  {inst}: {count}")
 
     console.print()
 

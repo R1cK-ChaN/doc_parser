@@ -88,15 +88,20 @@ async def process_file(
         "processed_at": int(time.time()),
 
         "title": fields.get("title"),
-        "broker": fields.get("broker"),
+        "institution": fields.get("institution"),
         "authors": fields.get("authors"),
         "publish_date": fields.get("publish_date"),
+        "data_period": fields.get("data_period"),
+        "country": fields.get("country"),
         "market": fields.get("market"),
         "asset_class": fields.get("asset_class"),
         "sector": fields.get("sector"),
         "document_type": fields.get("document_type"),
-        "target_company": fields.get("target_company"),
-        "ticker_symbol": fields.get("ticker_symbol"),
+        "event_type": fields.get("event_type"),
+        "subject": fields.get("subject"),
+        "subject_id": fields.get("subject_id"),
+        "language": fields.get("language"),
+        "contains_commentary": fields.get("contains_commentary"),
 
         "markdown": markdown,
 
@@ -170,15 +175,20 @@ async def re_extract(
     # Update fields in existing result
     fields = ext_result.fields
     existing["title"] = fields.get("title")
-    existing["broker"] = fields.get("broker")
+    existing["institution"] = fields.get("institution")
     existing["authors"] = fields.get("authors")
     existing["publish_date"] = fields.get("publish_date")
+    existing["data_period"] = fields.get("data_period")
+    existing["country"] = fields.get("country")
     existing["market"] = fields.get("market")
     existing["asset_class"] = fields.get("asset_class")
     existing["sector"] = fields.get("sector")
     existing["document_type"] = fields.get("document_type")
-    existing["target_company"] = fields.get("target_company")
-    existing["ticker_symbol"] = fields.get("ticker_symbol")
+    existing["event_type"] = fields.get("event_type")
+    existing["subject"] = fields.get("subject")
+    existing["subject_id"] = fields.get("subject_id")
+    existing["language"] = fields.get("language")
+    existing["contains_commentary"] = fields.get("contains_commentary")
     existing["processed_at"] = int(time.time())
     existing["extraction_info"] = {
         "provider": "llm",

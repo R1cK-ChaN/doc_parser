@@ -116,7 +116,7 @@ def test_re_extract_success(runner: CliRunner, tmp_path):
         patch("doc_parser.cli.get_settings") as mock_gs,
         patch("doc_parser.storage.resolve_sha_prefix", return_value="a" * 64),
         patch("doc_parser.pipeline.re_extract", new_callable=AsyncMock, return_value={
-            "title": "New Title", "broker": "New Broker",
+            "title": "New Title", "institution": "New Institution",
         }),
     ):
         mock_settings = MagicMock()
@@ -162,9 +162,9 @@ def test_status_empty(runner: CliRunner):
 def test_status_with_results(runner: CliRunner):
     """status shows counts when results exist."""
     results = [
-        {"sha256": "a" * 64, "source": "local", "broker": "GS"},
-        {"sha256": "b" * 64, "source": "drive", "broker": "GS"},
-        {"sha256": "c" * 64, "source": "local", "broker": "MS"},
+        {"sha256": "a" * 64, "source": "local", "institution": "GS"},
+        {"sha256": "b" * 64, "source": "drive", "institution": "GS"},
+        {"sha256": "c" * 64, "source": "local", "institution": "MS"},
     ]
 
     with (

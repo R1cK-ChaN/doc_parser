@@ -146,7 +146,7 @@ async def test_run_extraction_returns_result(tmp_path: Path, test_settings):
     pdf.write_bytes(b"%PDF test")
 
     mock_result = ExtractionResult(
-        fields={"title": "Q4 Report", "broker": "GS"},
+        fields={"title": "Q4 Report", "institution": "GS"},
         duration_ms=500,
         request_id="ext-1",
     )
@@ -161,7 +161,7 @@ async def test_run_extraction_returns_result(tmp_path: Path, test_settings):
 
     assert isinstance(result, ExtractionResult)
     assert result.fields["title"] == "Q4 Report"
-    assert result.fields["broker"] == "GS"
+    assert result.fields["institution"] == "GS"
 
 
 @pytest.mark.asyncio

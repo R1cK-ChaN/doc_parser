@@ -51,15 +51,20 @@ def _mock_extraction_result(**overrides) -> ExtractionResult:
     defaults = dict(
         fields={
             "title": "Q4 Report",
-            "broker": "Goldman Sachs",
+            "institution": "Goldman Sachs",
             "authors": "John Doe",
             "publish_date": "2024-01-15",
+            "data_period": "Q4 2024",
+            "country": "US",
             "market": "US",
             "asset_class": "Macro",
             "sector": "Technology",
             "document_type": "Research Report",
-            "target_company": "Apple Inc",
-            "ticker_symbol": "AAPL",
+            "event_type": None,
+            "subject": "Apple Inc",
+            "subject_id": "AAPL",
+            "language": "en",
+            "contains_commentary": True,
         },
         duration_ms=500,
         request_id="ext-1",
@@ -91,8 +96,8 @@ async def test_process_local_writes_json(tmp_path: Path):
     assert result["file_name"] == "report.pdf"
     assert result["source"] == "local"
     assert result["title"] == "Q4 Report"
-    assert result["broker"] == "Goldman Sachs"
-    assert result["ticker_symbol"] == "AAPL"
+    assert result["institution"] == "Goldman Sachs"
+    assert result["subject_id"] == "AAPL"
     assert result["markdown"] is not None
     assert result["parse_info"]["page_count"] == 1
     assert result["extraction_info"]["provider"] == "llm"
@@ -143,7 +148,7 @@ async def test_process_local_force_reprocesses(tmp_path: Path):
     with (
         patch("doc_parser.pipeline.run_parse", new_callable=AsyncMock, return_value=_mock_parse_result()),
         patch("doc_parser.pipeline.run_extraction", new_callable=AsyncMock, return_value=_mock_extraction_result(
-            fields={"title": "Updated Report", "broker": "MS"}
+            fields={"title": "Updated Report", "institution": "MS"}
         )),
     ):
         sha2 = await process_local(settings, pdf, force=True)
@@ -171,21 +176,21 @@ async def test_re_extract_updates_fields(tmp_path: Path):
         "source": "local",
         "local_path": str(pdf),
         "title": "Old Title",
-        "broker": "Old Broker",
+        "institution": "Old Institution",
         "markdown": "# Original markdown",
         "parse_info": {"page_count": 1},
         "extraction_info": {"provider": "llm"},
     }
     save_result(settings.extraction_path, existing)
 
-    new_ext = _mock_extraction_result(fields={"title": "New Title", "broker": "New Broker"})
+    new_ext = _mock_extraction_result(fields={"title": "New Title", "institution": "New Institution"})
 
     with patch("doc_parser.pipeline.run_extraction", new_callable=AsyncMock, return_value=new_ext):
         result = await re_extract(settings, sha)
 
     assert result is not None
     assert result["title"] == "New Title"
-    assert result["broker"] == "New Broker"
+    assert result["institution"] == "New Institution"
     # Markdown preserved
     assert result["markdown"] == "# Original markdown"
 
