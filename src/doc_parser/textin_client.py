@@ -58,6 +58,8 @@ EXTRACTION_FIELDS = [
     {"key": "subject_id", "description": "Identifier for the subject if available (e.g., AAPL, CPIAUCSL)"},
     {"key": "language", "description": "Document language (e.g., en, zh)"},
     {"key": "contains_commentary", "description": "Whether the document contains qualitative commentary or analysis from officials/analysts (true or false)"},
+    {"key": "impact_level", "description": "Financial market impact level: 'critical' (bank failure, market crash, currency crisis), 'high' (rate decision, CPI, NFP, tariff, recession), 'medium' (inflation, yield, oil, bitcoin, earnings), 'low' (housing, hedge fund, regulation, geopolitics), or 'info' (no significant financial impact)"},
+    {"key": "confidence", "description": "Confidence in the impact_level classification, from 0.0 to 1.0 (e.g., 0.9 for critical, 0.8 for high, 0.7 for medium, 0.6 for low, 0.3 for info)"},
 ]
 
 # ---------------------------------------------------------------------------

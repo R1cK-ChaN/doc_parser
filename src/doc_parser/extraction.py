@@ -63,6 +63,18 @@ should be false.
 For language, use the primary language of the document body: "en" or "zh". \
 If the document has substantial content in both languages, use "en,zh".
 
+For impact_level, assess from a macro-finance trading perspective how \
+significant this document's content is for financial markets. Use the same \
+scale: "critical" for systemic events (bank failures, crashes, currency \
+crises), "high" for major scheduled releases and policy decisions (rate \
+decisions, CPI, NFP, tariffs), "medium" for notable market-moving topics \
+(inflation data, yield moves, earnings, commodities), "low" for background \
+context (housing, regulation, geopolitics), "info" for minimal market impact.
+
+For confidence, reflect how certain you are about the impact_level. Use 0.9 \
+for clear critical events, 0.8 for high, 0.7 for medium, 0.6 for low, 0.3 \
+for info. Adjust within ±0.1 based on how clearly the content matches.
+
 document_type describes the form of the document (e.g., "Research Report", \
 "Meeting Minutes"). event_type describes the event that triggered the \
 document (e.g., "Economic Release", "Press Conference"). The two may \

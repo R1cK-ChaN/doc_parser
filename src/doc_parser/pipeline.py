@@ -102,6 +102,8 @@ async def process_file(
         "subject_id": fields.get("subject_id"),
         "language": fields.get("language"),
         "contains_commentary": fields.get("contains_commentary"),
+        "impact_level": fields.get("impact_level"),
+        "confidence": fields.get("confidence"),
 
         "markdown": markdown,
 
@@ -189,6 +191,8 @@ async def re_extract(
     existing["subject_id"] = fields.get("subject_id")
     existing["language"] = fields.get("language")
     existing["contains_commentary"] = fields.get("contains_commentary")
+    existing["impact_level"] = fields.get("impact_level")
+    existing["confidence"] = fields.get("confidence")
     existing["processed_at"] = int(time.time())
     existing["extraction_info"] = {
         "provider": "llm",
